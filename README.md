@@ -124,6 +124,7 @@ robot = LiteArmRobot(LiteArmRobotConfig.from_yaml("config.yaml"))
 | `settle_s` | `0.2` | Seconds to wait for the arm to settle after each `movej` |
 | `use_commander` | `True` | Non-blocking background commander (see below) |
 | `enable_on_connect` | `True` | Call `enable()` (motors on, hold pose) on `connect()` |
+| `disable_on_disconnect` | `False` | Call `disable()` instead of `hold()` on `disconnect()` (arm goes limp) |
 
 ## Observation / action loop
 
@@ -193,7 +194,7 @@ robot.disconnect()
 
 Key points:
 
-- `LeRobotDataset.create(...)` stores the dataset directly at `<root>/<repo_id>`
+- `LeRobotDataset.create(...)` stores the dataset directly at `<root>`
   and **refuses to overwrite** an existing directory — pick a fresh `repo_id` or
   delete the directory to re-record.
 - Every frame must contain a `"task"` key and numpy **float32** arrays for each
@@ -252,7 +253,7 @@ python examples/03_record_dataset.py --endpoint tcp/192.168.31.237:7447 \
 | `ValueError: action must have 7 joints, got N` | The action vector must contain exactly `num_joints` values. |
 | `ValueError: action dict must contain an 'action' key` | `send_action` expects `{"action": [..]}`. |
 | `enable()` fails on connect | The server may be read-only; the connection continues (logged as a warning). |
-| Dataset already exists at `<root>/<repo_id>` | `LeRobotDataset.create` refuses to overwrite. Pick a new `--repo-id` or delete the directory. |
+| Dataset already exists at `<root>` | `LeRobotDataset.create` refuses to overwrite. Pick a new `--repo-id` or delete the directory. |
 
 ## Package layout
 

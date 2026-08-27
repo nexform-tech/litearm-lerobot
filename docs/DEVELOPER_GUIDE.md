@@ -45,6 +45,7 @@ under the name `litearm`. All fields:
 | `settle_s` | `0.2` | Wait after motion before returning |
 | `use_commander` | `True` | Use the non-blocking background commander |
 | `enable_on_connect` | `True` | Call `enable()` on connect |
+| `disable_on_disconnect` | `False` | Call `disable()` instead of `hold()` on disconnect |
 
 ## 3. Robot interface
 
@@ -88,7 +89,7 @@ features = {
 ```
 
 `LeRobotDataset.create(repo_id, fps, root, ...)` stores the dataset directly at
-`<root>/<repo_id>` and **refuses to overwrite** an existing directory — pick a
+`<root>` and **refuses to overwrite** an existing directory — pick a
 fresh `repo_id` or delete the directory to re-record. Every frame must contain a
 `"task"` key and numpy float32 arrays:
 

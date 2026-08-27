@@ -32,3 +32,6 @@ class LiteArmRobotConfig(RobotConfig):
     use_commander: bool = True
     #: Enable motors and hold the current pose on connect().
     enable_on_connect: bool = True
+    #: Disable motors on disconnect() so the arm goes limp.  When False the
+    #: arm stays enabled and holds its last pose after disconnect.
+    disable_on_disconnect: bool = False

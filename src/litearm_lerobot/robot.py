@@ -29,6 +29,8 @@ class _Commander:
     this is what makes a LeRobot teleop/record loop usable.
     """
 
+    _MAX_CONSECUTIVE_ERRORS = 5
+
     def __init__(
         self,
         arm: litearm.Arm,
@@ -52,6 +54,7 @@ class _Commander:
     def start(self) -> None:
         if self._thread is not None:
             return
+        self._stop.clear()
         self._thread = threading.Thread(
             target=self._run, daemon=True, name="litearm-commander"
         )
@@ -61,10 +64,16 @@ class _Commander:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
+            if self._thread.is_alive():
+                log.warning(
+                    "Commander thread did not stop within 2 s; "
+                    "the arm may still be moving."
+                )
         self._thread = None
 
     def _run(self) -> None:
         last_sent: Optional[tuple] = None
+        consecutive_errors = 0
         while not self._stop.is_set():
             with self._lock:
                 target = list(self._target) if self._target is not None else None
@@ -73,10 +82,18 @@ class _Commander:
                 try:
                     self._arm.movej(target, speed=self._speed, settle_s=self._settle_s)
                     last_sent = key
-                except Exception:  # arm moved/stopped meanwhile: retry on next tick
+                    consecutive_errors = 0
+                except Exception:
+                    consecutive_errors += 1
+                    backoff = min(self._period * (2 ** min(consecutive_errors, 4)), 5.0)
+                    log.warning(
+                        "movej failed (consecutive=%d), retrying in %.1f s",
+                        consecutive_errors, backoff,
+                    )
                     last_sent = None
-                    self._stop.wait(self._period)
+                    self._stop.wait(backoff)
             else:
+                consecutive_errors = 0
                 self._stop.wait(self._period)
 
 
@@ -193,7 +210,10 @@ class LiteArmRobot(Robot):
             self._commander = None
         if self._arm is not None:
             try:
-                self._arm.hold()  # hold the current pose on exit
+                if self.config.disable_on_disconnect:
+                    self._arm.disable()
+                else:
+                    self._arm.hold()  # hold the current pose on exit
             except Exception:
                 pass
             self._arm.close()

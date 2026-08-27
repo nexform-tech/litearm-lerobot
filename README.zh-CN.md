@@ -121,6 +121,7 @@ robot = LiteArmRobot(LiteArmRobotConfig.from_yaml("config.yaml"))
 | `settle_s` | `0.2` | 每次 `movej` 到位后等待时间 |
 | `use_commander` | `True` | 非阻塞后台 commander（见下） |
 | `enable_on_connect` | `True` | `connect()` 时调用 `enable()`（上电并保持位姿） |
+| `disable_on_disconnect` | `False` | `disconnect()` 时调用 `disable()` 而非 `hold()`（机械臂卸力） |
 
 ## 观测 / 动作循环
 
@@ -186,7 +187,7 @@ robot.disconnect()
 
 要点：
 
-- `LeRobotDataset.create(...)` 会把数据集直接存在 `<root>/<repo_id>`，且**拒绝覆盖**
+- `LeRobotDataset.create(...)` 会把数据集直接存在 `<root>`，且**拒绝覆盖**
   已存在的目录——请换新的 `repo_id` 或删目录重录。
 - 每一帧必须含 `"task"` 键，且每个 feature 均为 numpy **float32** 数组。
 - 完整循环为 `create_episode_buffer()` → `add_frame(...)` × N →
@@ -241,7 +242,7 @@ python examples/03_record_dataset.py --endpoint tcp/192.168.31.237:7447 \
 | `ValueError: action must have 7 joints, got N` | 动作向量必须正好 `num_joints` 个值。 |
 | `ValueError: action dict must contain an 'action' key` | `send_action` 期望 `{"action": [..]}`。 |
 | 连接时 `enable()` 失败 | 服务器可能只读；连接会继续（仅记录警告日志）。 |
-| `<root>/<repo_id>` 数据集已存在 | `LeRobotDataset.create` 拒绝覆盖。换新的 `--repo-id` 或删除目录。 |
+| `<root>` 数据集已存在 | `LeRobotDataset.create` 拒绝覆盖。换新的 `--repo-id` 或删除目录。 |
 
 ## 包结构
 

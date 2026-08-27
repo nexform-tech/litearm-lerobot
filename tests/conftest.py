@@ -30,6 +30,9 @@ class FakeArm:
     def enable(self):
         self.calls.append("enable")
 
+    def disable(self):
+        self.calls.append("disable")
+
     def hold(self):
         self.calls.append("hold")
 

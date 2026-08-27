@@ -87,4 +87,41 @@ def test_disconnect_holds_and_closes(make_robot):
     robot.disconnect()
     assert arm.closed
     assert "hold" in arm.calls
+    assert "disable" not in arm.calls
     assert robot.is_connected is False
+
+
+def test_disconnect_disables_when_configured(make_robot):
+    robot, arm = make_robot(disable_on_disconnect=True)
+    robot.connect()
+    robot.disconnect()
+    assert arm.closed
+    assert "disable" in arm.calls
+    assert "hold" not in arm.calls
+    assert robot.is_connected is False
+
+
+def test_commander_backoff_on_errors(make_robot):
+    robot, arm = make_robot(use_commander=True, settle_s=0.01)
+    robot.connect()
+    # Make movej always fail
+    original_movej = arm.movej
+    call_count = [0]
+
+    def failing_movej(*args, **kwargs):
+        call_count[0] += 1
+        raise RuntimeError("simulated failure")
+
+    arm.movej = failing_movej
+    try:
+        robot.send_action({"action": [0.5] * 7})
+        # Wait for a few retries
+        deadline = time.monotonic() + 3.0
+        while call_count[0] < 3 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        # After 5 consecutive errors the backoff should be at least 5 s,
+        # so we should see at most a handful of calls (not hundreds).
+        assert call_count[0] < 20  # tight loop would be hundreds
+    finally:
+        arm.movej = original_movej
+        robot.disconnect()

@@ -9,6 +9,7 @@ description = "LeRobot driver for the LiteArm robotic arm (wraps litearm-python)
 readme = "README.md"
 requires-python = ">=3.10"
 license = "LicenseRef-Proprietary"
+license-files = ["LICENSE"]
 authors = [{ name = "luochun" }]
 keywords = ["robotics", "robot-arm", "litearm", "lerobot"]
 dependencies = [
@@ -17,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest>=7.0"]
 
 [tool.setuptools]
 include-package-data = false

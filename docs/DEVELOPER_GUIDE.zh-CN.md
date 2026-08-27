@@ -44,6 +44,7 @@ python -m pytest tests/ -q
 | `settle_s` | `0.2` | 运动结束后等待时间 |
 | `use_commander` | `True` | 使用非阻塞后台 commander |
 | `enable_on_connect` | `True` | 连接时调用 `enable()` |
+| `disable_on_disconnect` | `False` | 断开时调用 `disable()` 而非 `hold()` |
 
 ## 3. Robot 接口
 
@@ -84,7 +85,7 @@ features = {
 ```
 
 `LeRobotDataset.create(repo_id, fps, root, ...)` 会把数据集直接存在
-`<root>/<repo_id>`，且**拒绝覆盖**已存在的目录——请换新的 `repo_id` 或删目录
+`<root>`，且**拒绝覆盖**已存在的目录——请换新的 `repo_id` 或删目录
 重录。每一帧必须含 `"task"` 键且为 numpy float32 数组：
 
 ```python
