@@ -4,7 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "litearm-lerobot"
-version = "0.1.0"
+# PLACEHOLDER — do not edit, do not read. semantic-release owns the version; the
+# git tag is the only source of truth (AGENTS.md §3).
+# AGENTS.md spells the placeholder `0.0.0-semantic-release`, but that is not valid
+# PEP 440: setuptools refuses it (`project.version must be pep440`), which breaks
+# the `pip install -e ".[dev]"` step of ci.yml. The `+` local-version form is the
+# same intent and is valid. This repository publishes to no index (release.yml is
+# the source-only shape), so the local label is inert. Same fix as
+# litearm-studio/daemon, which is in the identical situation.
+version = "0.0.0+semantic-release"
 description = "LeRobot driver for the LiteArm robotic arm (wraps litearm-python)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +21,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "luochun" }]
 keywords = ["robotics", "robot-arm", "litearm", "lerobot"]
 dependencies = [
-    "litearm-python>=0.1.0",
+    "litearm-python>=2.1.0",
     "lerobot>=0.3.0,<0.5",
 ]
 

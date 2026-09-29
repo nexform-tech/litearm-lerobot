@@ -17,30 +17,22 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from litearm_lerobot import LiteArmRobot, LiteArmRobotConfig
 
-DEFAULT_ENDPOINT = "tcp/192.168.31.237:7447"
-
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--endpoint", default=DEFAULT_ENDPOINT,
-                    help=f"litearm-server zenoh endpoint (default {DEFAULT_ENDPOINT})")
-    ap.add_argument("--arm-id", default="armA", help="Arm id (default armA)")
+    ap.add_argument("--port", default=None,
+                    help="CDC port (default: auto-detect)")
     ap.add_argument("--repo-id", default="litearm_demo", help="dataset repo id")
     ap.add_argument("--root", default="data", help="dataset root directory")
     ap.add_argument("--fps", type=int, default=30, help="recording frequency")
-    ap.add_argument("--task", default="push", help="task name for the episode")
+    ap.add_argument("--task", default="push", help="task label")
     ap.add_argument("--episodes", type=int, default=1, help="number of episodes")
     ap.add_argument("--episode-length", type=int, default=50,
                     help="frames per episode")
     args = ap.parse_args()
 
-    robot = LiteArmRobot(LiteArmRobotConfig(
-        endpoint=args.endpoint,
-        arm_id=args.arm_id,
-        use_commander=True,
-    ))
-    robot.connect()
-    try:
+    cfg = LiteArmRobotConfig(port=args.port)
+    with LiteArmRobot(cfg) as robot:
         # LeRobotDataset.create expects full feature specs (not the shorthand
         # returned by robot.observation_features / action_features).
         features = {
@@ -80,8 +72,6 @@ def main():
                 time.sleep(1.0 / args.fps)
             dataset.save_episode()
             print(f"--- episode {episode} saved ---")
-    finally:
-        robot.disconnect()
 
 
 if __name__ == "__main__":

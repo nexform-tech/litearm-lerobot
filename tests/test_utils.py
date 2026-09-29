@@ -19,29 +19,41 @@ def test_register_is_idempotent():
 
 
 def test_register_returns_litearm_robot(monkeypatch):
+    """`register()` 之后，`type == 'litearm'` 的配置能造出 LiteArmRobot。"""
     import litearm
-    from litearm_lerobot import LiteArmRobotConfig
+
+    from litearm_lerobot import LiteArmRobot
 
     class _Arm:
-        def get_state(self):
-            return {"q": [0.0] * 7}
+        def __init__(self, **kw):
+            self.n = 7
+            self.params = self
 
-        def enable(self):
+        def connect(self):
+            return self
+
+        def get_state(self, refresh=False):
+            from conftest import FakeMsg, FakeRobotState, FakeJointState
+            return FakeMsg(FakeRobotState(
+                joints=[FakeJointState() for _ in range(7)]))
+
+        def all_joint_params(self):
+            from conftest import FakeJointParam, FakeArm
+            return [FakeJointParam(*lo_hi) for lo_hi in FakeArm.LIMITS]
+
+        def enable(self, attempts=12):
             pass
 
         def close(self):
             pass
 
-    monkeypatch.setattr(litearm, "Arm", lambda **kw: _Arm())
+    monkeypatch.setattr(litearm, "Arm", lambda *a, **kw: _Arm())
     register()
 
     from lerobot.robots import utils as robot_utils
+    from litearm_lerobot import LiteArmRobotConfig
 
-    robot = robot_utils.make_robot_from_config(
-        LiteArmRobotConfig(endpoint="tcp/127.0.0.1:7447", use_commander=False)
-    )
-    from litearm_lerobot import LiteArmRobot
-
+    robot = robot_utils.make_robot_from_config(LiteArmRobotConfig())
     assert isinstance(robot, LiteArmRobot)
 
 
