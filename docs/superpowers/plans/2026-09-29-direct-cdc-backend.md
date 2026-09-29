@@ -2701,7 +2701,7 @@ git commit -m "docs: rewrite the guides for the direct-CDC backend"
  [project]
  name = "litearm-lerobot"
 -version = "0.1.0"
-+version = "0.0.0-semantic-release"
++version = "0.0.0+semantic-release"
  description = "LeRobot driver for the LiteArm robotic arm (wraps litearm-python)"
  readme = "README.md"
  requires-python = ">=3.10"
@@ -2716,6 +2716,13 @@ git commit -m "docs: rewrite the guides for the direct-CDC backend"
  ]
 ```
 
+> ⚠⚠ **拼法必须带 `+`**：`0.0.0-semantic-release`（模板原文）**不是合法的
+> PEP 440 版本**，setuptools 直接拒 ⇒ CI 的 `pip install -e ".[dev]"` 装不上包。
+> 实测：`packaging.version.Version('0.0.0-semantic-release')` 抛 `InvalidVersion`；
+> 走 setuptools 的 `prepare_metadata_for_build_editable` 回
+> `configuration error: `project.version` must be pep440`。
+> 同组织先例：`litearm-studio/daemon/pyproject.toml` 用的就是 `0.0.0+semantic-release`。
+>
 > ⚠ `version` 改成占位符是 `AGENTS.md` §3 的硬规矩：清单里的版本号是占位符，
 > **唯一真源是 git tag**。不要参考 `litearm-python` 那份（它保留了真实版本号，
 > 那是它自己的偏离，不是本仓的范例）。

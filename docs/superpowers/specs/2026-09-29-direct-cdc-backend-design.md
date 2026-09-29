@@ -514,7 +514,14 @@ def test_no_unexpected_arm_kwargs():
 
 | 项 | 处置 |
 |---|---|
-| `pyproject.toml` 的 `version` | `0.1.0` → `0.0.0-semantic-release`（`AGENTS.md` §3「Versioning and Releases」+ `INTEGRATION.md` gotcha 6：清单里的 version 是占位符，唯一真源是 git tag） |
+| `pyproject.toml` 的 `version` | `0.1.0` → **`0.0.0+semantic-release`**（`AGENTS.md` §3 + `INTEGRATION.md` gotcha 6 要求用占位符、唯一真源是 git tag；⚠ 但模板写的那串**过不了 PEP 440**，见下） |
+
+⚠ **占位符的拼法在本仓必须是 `0.0.0+semantic-release`，不是模板里写的
+`0.0.0-semantic-release`**：后者**过不了 PEP 440**，setuptools 直接拒（实测
+`configuration error: `project.version` must be pep440`）⇒ CI 的
+`pip install -e ".[dev]"` 装不上包。同组织 `litearm-studio/daemon/pyproject.toml`
+就是 `0.0.0+semantic-release`。
+
 | `pyproject.toml` 的依赖 | `litearm-python>=0.1.0` → `>=2.1.0`（旧值指向 server 语义那份） |
 | `ci.yml` | 保持 `litearm-python @ git+https://github.com/nexform-tech/litearm-python`（它不在 PyPI 上）；确认与新版 `pyproject` 一致 |
 | `README.md` / `README.zh-CN.md` | 重写：删 zenoh + server，加固件版本要求与 CDC 端口 |
