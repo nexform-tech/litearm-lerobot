@@ -518,7 +518,7 @@ def test_no_unexpected_arm_kwargs():
 
 ⚠ **占位符的拼法在本仓必须是 `0.0.0+semantic-release`，不是模板里写的
 `0.0.0-semantic-release`**：后者**过不了 PEP 440**，setuptools 直接拒（实测
-`configuration error: `project.version` must be pep440`）⇒ CI 的
+`configuration error: project.version must be pep440`）⇒ CI 的
 `pip install -e ".[dev]"` 装不上包。同组织 `litearm-studio/daemon/pyproject.toml`
 就是 `0.0.0+semantic-release`。
 
