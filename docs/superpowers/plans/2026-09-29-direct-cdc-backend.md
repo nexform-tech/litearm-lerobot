@@ -31,8 +31,13 @@
 6. 提交信息一律 Conventional Commits、**英文**、72 字符以内 subject、**绝不出现 `Co-Authored-By` 或任何工具署名**。
 
 **这份计划的代码已经真跑过。** 把本文档里的代码块逐字抽到 `/tmp` 下、对着真
-`litearm` 2.1.0 与 `lerobot` 0.4.4 执行：**87 passed / 0 failed**。抽取方式见
-Task 12 Step 1。若你照抄后跑不出这个数，是你抄漏了或环境不同 —— 先核这一条。
+`litearm` 2.1.0 与 `lerobot` 0.4.4 执行：**全绿，86 条**（逐文件 5+5+20+21+17+15+3）。
+抽取方式与两个已知盲区见 Task 12 Step 1。
+
+⚠ 这条断言曾经写成 **87**，那是错的：抽取脚本有盲区，把 Task 8 的两条速度判据
+**同时**写进了 `test_safety.py` 与 `test_utils.py`（后者本该是
+`test_register_returns_litearm_robot`）⇒ 重复计数多出一条。**以仓里
+`pytest --collect-only` 的实际条数为准**，不是以抽取树为准。
 
 ---
 
@@ -2357,7 +2362,7 @@ def test_register_returns_litearm_robot(monkeypatch):
 - [ ] **Step 3: 跑全量测试**
 
 Run: `/usr/bin/python3 -m pytest -q`
-Expected: PASS（全绿，87 条 —— 实测值，见本节末尾）
+Expected: PASS（全绿，**86 passed**）
 
 - [ ] **Step 4: 提交**
 
@@ -2720,7 +2725,7 @@ git commit -m "build: use the release placeholder version and require SDK 2.1"
 - [ ] **Step 1: 全量测试**
 
 Run: `/usr/bin/python3 -m pytest -q`
-Expected: 全绿 **87 passed**。把**逐字的输出**记下来。
+Expected: 全绿 **86 passed**。把**逐字的输出**记下来。
 
 > **复现"计划代码已跑过"这个说法**：把本计划的代码块逐字抽出来独立跑一遍，
 > 与"按计划实现"是两条独立路径 —— 前者证明计划本身可执行，后者证明实现落了地。
@@ -2763,7 +2768,7 @@ cp /home/llx/litearm-lerobot/src/litearm_lerobot/utils.py /tmp/plancheck/src/lit
 cd /tmp/plancheck && PYTHONPATH=/tmp/plancheck/src /usr/bin/python3 -m pytest -q
 ```
 
-Expected: `87 passed`。
+Expected: `86 passed`（⚠ 抽取树可能因盲区多算一条，见上方警告）。
 
 - [ ] **Step 2: 确认没有残留的旧 API 引用**
 
