@@ -225,7 +225,7 @@ PC 送下去的 `q_s` 本身已经是梯形限速的参考，**两级串联谁�
 | — | 新增 `actuator: "joint_follow" \| "move_js" = "joint_follow"` | §5.4 |
 | — | 新增 `k_p` / `k_d`: `list[float] \| None = None` | `None` ⇒ 用 §8 的表 |
 | — | 新增 `speed_limit` / `accel_limit`: `list[float] \| None = None` | `None` ⇒ 用 §7.1 的通用档 |
-| — | 新增 `limit_margin: float = 0.02` | 软限位内缩 |
+| — | 新增 `limit_margin: float = 0.01` | 软限位内缩；⚠ 见 §7.2 的 J4 约束，**不能随便调大** |
 | — | 新增 `engage_sec: float = 0.3` | 接管托举时长 |
 
 **`k_p` / `k_d` 只在 `actuator="joint_follow"` 时有效。** `move_js` 没有随帧增益通道，
@@ -305,6 +305,25 @@ accel_limit = [8.0, 8.0, 7.0, 7.0, 9.0, 9.0, 9.0]      # = 固件 jp->acc_max
 | 4 | 固件 `law_wall` | 距限位 `margin` 处给排斥力矩，叠进 `tau_ff` |
 | 5 | 固件 `slew_linear` | `q_ref` 逐拍斜率限制 |
 
+⚠⚠ **`limit_margin` 不能随便调大 —— J4 的固件上端只有 `+0.017547 rad`（1°）**
+（`joint_limit_macros.h:16`）。内缩 `margin` 后 J4 的上界是 `0.017547 − margin`：
+
+```text
+margin = 0.01（本仓取值）  -> J4 上界 +0.0075 rad，仍可用
+margin = 0.02（错的值）    -> J4 上界 -0.0025 rad  ⇒ J4 整个正半轴消失
+```
+
+而且**这个错误不会报错**：`read_limits_ok` 只检查 `lo < hi`，两者仍成立 ⇒ 静默地
+把 J4 的正半轴抹掉。这正是同构遥操仓文档里记的那次真机事故的根因
+（"J4 特别容易过软件限位"），当时的内缩值曾被抬到 0.14，比实际所需大一个量级。
+
+关于下界的方向也别搞反：固件的位置锁存条件是 `q_meas > q_max + 0.05`，而目标已被钳到
+`q_max − margin`、实测最多再冲过 `overshoot ≈ vel_max × 2 × RTT ≈ 0.013 rad` ⇒
+**不锁存的条件是 `margin ≥ overshoot − 0.05`**，即任何 `margin ≥ 0` 都够。取 0.01 是
+照抄 litearm-server 的浮点/标定余量。
+
+**判据**（§9.4）：`hi[i] > lo[i]` 之外，还要断言 **J4 的可用行程不被压没**
+（`hi[3] - lo[3]` 不小于固件行程的 99%）。
 限位**读不到就拒启动**，绝不退回哨兵值（`read_safe_limits` 抛 `LimitsError`）。
 
 ### 7.3 `0x08` 会话豁免的精确边界
@@ -397,6 +416,7 @@ P1/P2/P3 三条就登记在那里）。
 |---|---|---|---|
 | PC 侧 `speed_limit` / `accel_limit` | `[2.0,2.0,1.75,1.75,2.0,2.0,2.0]` / `[8,8,7,7,9,9,9]` | 有意收窄；来源 = 固件 `jp->speed_limit` / `jp->acc_max` | 待真机验证 |
 | PC 侧 `k_p` / `k_d` | 见 §8.1 | 来源 = 同构遥操仓 P3 那版 | **非本仓实测** |
+| PC 侧 `limit_margin` | `0.01` | 照抄 litearm-server；**受 J4 上端 `+0.0175 rad` 约束**（§7.2） | 沿用，非本仓实测 |
 
 ## 9. 测试策略
 
