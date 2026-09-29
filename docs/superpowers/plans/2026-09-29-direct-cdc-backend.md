@@ -559,7 +559,9 @@ def test_reference_slew_is_actually_loaded():
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `/usr/bin/python3 -m pytest tests/test_safety.py -k pylitearm -q`
+Run: `/usr/bin/python3 -m pytest tests/test_safety.py -k "pylitearm or actually_loaded" -q`
+（⚠ 只写 `-k pylitearm` **选不中** `test_reference_slew_is_actually_loaded` ——
+名字里没有那个词。实测：`-k pylitearm` 只见 3 条，漏掉第 4 条。）
 Expected: 应能通过。**若 FAIL** —— 说明我的移植与原版有差异，**修 `safety.py` 去对齐原版**，不要改这条测试。若报 `FileNotFoundError`，说明本机没有 `pylitearm` 仓，此时**把这条测试标成 `@pytest.mark.skipif(not os.path.exists(...))`** 并在提交信息里写明"对拍判据在本机跳过"。
 
 - [ ] **Step 3: 提交**
