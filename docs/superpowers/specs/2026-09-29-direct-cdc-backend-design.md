@@ -17,16 +17,30 @@
 $ /usr/bin/python3 -c "import litearm; litearm.Arm(endpoint='tcp/127.0.0.1:7447', arm_id='armA')"
 TypeError: Arm.__init__() got an unexpected keyword argument 'endpoint'
 
-$ /usr/bin/python3 -c "import litearm, inspect; print(inspect.signature(litearm.Arm.__init__))"
-(self, port: Optional[str] = None, *, transport_factory=None, min_firmware=(1, 5, 0),
- q_tol=0.03, dq_tol=0.1, arrive_frames=3, move_timeout=15.0)
-
 $ /usr/bin/python3 -c "import litearm; print(hasattr(litearm.Arm, 'hold'))"
 False
 ```
 
-即 `robot.py` 里三处调用同时失效：`Arm(endpoint=..., arm_id=...)` 构造、
-`movej(..., settle_s=...)`、`disconnect()` 里的 `arm.hold()`。
+签名（原输出是一行，这里为排版折行）：
+
+```text
+(self, port: 'Optional[str]' = None, *, transport_factory: 'Optional[Any]' = None,
+ min_firmware: 'tuple' = (1, 5, 0), q_tol: 'float' = 0.03, dq_tol: 'float' = 0.1,
+ arrive_frames: 'int' = 3, move_timeout: 'float' = 15.0)
+```
+
+`robot.py` 里失效的调用**不止三处**：
+
+| 调用 | 失效方式 |
+|---|---|
+| `litearm.Arm(endpoint=..., arm_id=..., query_timeout=...)` | `TypeError`（三个关键字都不存在） |
+| `arm.get_state()["q"]` | `get_state()` 现在返回 `Msg` 信封，不是 dict |
+| `arm.movej(q, speed=..., settle_s=...)` | `settle_s` 不存在 |
+| `arm.hold()` | `AttributeError`（方法不存在） |
+| `arm.close()` | 不变，这个还在 |
+
+另外 `tests/conftest.py` 的 `FakeArm` 把前四项都按旧形状假造了出来，所以这四处
+在测试里全部"通过"。
 
 ### 1.2 测试全绿是假的，而且假得有结构
 
@@ -107,9 +121,9 @@ LeRobot Robot API
 
 | | `0x08` `joint_follow` | `0x03` `move_js` | `0x05` `send_mit_all` |
 |---|---|---|---|
-| K/B | **随帧下发**，钳 `MIT_KP_MAX=500` / `MIT_KD_MAX=5.0` | **固件出厂**：400/400/300/300/50/50/50，kd 5/5/4/5/2.5 | **随帧下发** |
+| K/B | **随帧下发**，钳 `MIT_KP_MAX=500` / `MIT_KD_MAX=5.0`；**不含** `kd_extra` | **固件出厂**：`mit_kp` 400/400/300/300/50/50/50、`mit_kd` 5/5/4/5/2.5，**外加 τ 域 `kd_extra`（J1~J4 = 6.0，J5~J7 = 0）** | **随帧下发**，钳同上 |
 | 重力前馈 | 固件算 `G(q_meas) + law_wall`，**不挂** `builtin_mode` | 固件算 `G(q_d)`，**挂** `builtin_mode`（`ff_mask` 出厂全开） | **不叠** ⇒ PC 必须送 `tau_ff`，否则臂会垂 |
-| 走位速率 | `s_jf_vel_max` = `[2.8,3.4,5.0,5.0,10.0,8.0,13.0]` | `v_lim` 取 `jp->speed_limit` = `[2.0,2.0,1.75,1.75,2.0,2.0,2.0]` | `jp->vel_max`（同左） |
+| 走位速率 | 参考 slew 用 `s_jf_vel_max` = `[2.8,3.4,5.0,5.0,10.0,8.0,13.0]` | `v_lim = clamp(abs(target_dq), 0, jp->speed_limit×gov)`；`dq_s` 钳到 `jp->vel_max` | `v_lim` 与 `dq_s` 钳**都**取 `jp->vel_max` |
 | 入口位置钳位 | 有（`clampf(q, q_min, q_max)`） | 有 | 有 |
 | 位置越界锁存 | **豁免** | 生效 | 生效 |
 | 超速锁存 | **豁免** | 生效 | 生效 |
@@ -117,12 +131,18 @@ LeRobot Robot API
 | 每拍往返 | 1 | 1 | 2（多一次 `get_gravity`） |
 | `dq` 语义 | 只进 `dq_s` 前馈 | **决定参考 slew 速率** ⇒ `dq=0` ⇒ 参考冻结、臂纹丝不动，且不报错 | 只进 `dq_s` 前馈 |
 
+⚠ **`kd_extra` 那一格是这张表里最容易漏的一项**：它加在 **τ 域**（`τ += kd_extra·(dq_d − dq_meas)`），
+位置在 `builtin_mode` 块**内**，而 `builtin_mode` 的白名单只有 `MOVE_J` 与
+`MOVE_JS && !s_js_user_ff` ⇒ **`0x03` 拿得到，`0x08`（走 `MOVE_MIT_ALL`）拿不到**。
+所以 `0x03` 在 J1/J2 上的**有效阻尼是 `mit_kd + kd_extra` = 5 + 6 = 11**，
+不是表上的 5 —— 而 `0x08` 的阻尼**恰好等于我们下发的那几个数**。
+
 `move_js` 的 `dq` 那一行是**静默失败**的雷区，必须配判别力判据（§9.5）。
 
 ### 5.2 看门狗：两个通道完全一样
 
 一个容易误判的点：`0x08` 与 `0x03` 走**同一个** `watchdog_check()`，超时都是 **0.1 s**
-（`params/defaults.c:48`），触发后**同样** fail-soft 持位（降刚度、τ=0、**允许下垂**）。
+（`params/defaults.c:172`），触发后**同样** fail-soft 持位（降刚度、τ=0、**允许下垂**）。
 只有 `MOVE_J` 自己 kick 看门狗（`control_loop.c:1939`），所以长距离 `movej` 不会中途掉。
 
 ⇒ 「换 `move_js` 更安全」**不能**拿看门狗论证。
@@ -345,22 +365,38 @@ k_d = [3.0, 5.0, 3.0, 3.0, 1.5, 1.5, 1.5]
 ENGAGE_KP, ENGAGE_KD = 15.0, 0.8
 ```
 
-**来源**：`litearm-teleop-isomorphic/liteteleop/servo.py` 的 `SETUP_K` / `SETUP_B`，
-2026-09-29 在真机上按「最大滞后 ↓55%、J2 过冲 ↓86%」的判据调出。
+**来源**：`litearm-teleop-isomorphic/liteteleop/servo.py` 的 `SETUP_K` / `SETUP_B`。
 
-**不是本仓实测。** 若本仓场景（策略回放的目标突变更多）手感不同，要另行标定并登记台账。
+**但不是本仓实测，而且证据强度要如实标：**
+
+| 轮次 | 表（J5~J7） | 结论 |
+|---|---|---|
+| P2 | K 133、B 2.4 | 真机验收：滞后 ↓55%、J2 过冲 ↓86%（**这两组数字属于 P2 那张表**） |
+| P3（= 本仓采用的这版） | K 80、B 1.5 | 台账自己写着「**本轮不是干净对照实验**……绝对值不可跨轮直比」；依据是"更贴出厂值"；实测结论是用户在**两版之间手感无差别** |
+
+⚠ **不要把 P2 的 ↓55%/↓86% 记到这版表上**。P3 那轮真正的结论是
+「J5 的过冲与增益**无关**（K 40→133→80、B 0.8→2.4→1.5，各变 3 倍多，过冲始终在
+0.053~0.063 的窄带里）⇒ **结构性**，最可能是腕部机械弹性，**建议不再追**」。
+
+而且这份调参的**场景是主从遥操**（人手拖主臂、连续平滑目标），本仓还有策略回放
+（目标可能跳变）。**场景不同 ⇒ 这批值在本仓只能算"起点"，不是"已验证"。**
 
 `k_d` 里 J2 = 5.0 是**顶到固件上限** `MIT_KD_MAX`。写 6.0 会被固件**静默钳成 5.0**
 —— 表上看着满足等比、实际值不符。故写真值 5.0。
 
 ### 8.2 台账登记
 
-按本组织的调参规矩，本次在 `PARAM_STATE.md §B` 登记两条：
+本组织唯一的调参台账是 **`/home/llx/litearm-stm32/tools/PARAM_STATE.md`**
+（`§B`，其下有 `§B-补. 遥操侧（PC）常量` 一节专门收 PC 侧常量 —— 同构遥操仓的
+P1/P2/P3 三条就登记在那里）。
 
-| 项 | 旧 | 新 | 依据 |
+**本仓不建第二本台账**（两本必然漂），本次要登记的两条，**由我来写进 spec 但由用户
+落到那份台账里** —— 它在另一个仓，本仓的改动不去动它：
+
+| 项 | 值 | 依据 | 状态 |
 |---|---|---|---|
-| PC 侧 `speed_limit` | 无（旧链路无此概念） | 通用档 `[2.0,2.0,1.75,1.75,2.0,2.0,2.0]` | 有意收窄；来源 = 固件 `jp->speed_limit` |
-| 伺服增益 `K`/`B` | 无 | 见 §8.1 | 来源 = 同构遥操仓 `servo.py`，**非本仓实测** |
+| PC 侧 `speed_limit` / `accel_limit` | `[2.0,2.0,1.75,1.75,2.0,2.0,2.0]` / `[8,8,7,7,9,9,9]` | 有意收窄；来源 = 固件 `jp->speed_limit` / `jp->acc_max` | 待真机验证 |
+| PC 侧 `k_p` / `k_d` | 见 §8.1 | 来源 = 同构遥操仓 P3 那版 | **非本仓实测** |
 
 ## 9. 测试策略
 
@@ -404,8 +440,16 @@ def test_no_unexpected_arm_kwargs():
 
 ### 9.4 默认值判据
 
-`speed_limit[i] <= s_jf_vel_max[i]`，逐轴断言。`s_jf_vel_max` 的值**从固件头文件解析**
-（或硬编码并注明固件来源），不从本仓实现取。
+`speed_limit[i] <= s_jf_vel_max[i]`，逐轴断言。
+
+**`s_jf_vel_max` 只能硬编码，不能靠解析。** 两条理由：① 它是 `static const float`
+定义在 `control_loop.c:238`，**没有任何头文件声明它**（`litearm.h:83` 只在注释里提到
+名字）；② 本仓的 CI 从不 checkout `litearm-stm32`（`.github/workflows/ci.yml` 只装
+`litearm-python`）⇒ 解析根本跑不了。
+
+所以测试里硬编码 `[2.8,3.4,5.0,5.0,10.0,8.0,13.0]` 并在注释里写上
+「来源 = `litearm-stm32` `control_loop.c:238`，改固件那张表时必须同步改这里」。
+期望值仍然**不是**从本仓实现取的（本仓默认是通用档），所以这条判据有判别力。
 
 ### 9.5 伺服环的判别力
 
@@ -435,15 +479,22 @@ def test_no_unexpected_arm_kwargs():
 
 ## 10. repo-template 规范合规
 
-已合规（核对过，无需改动）：`AGENTS.md`（与模板最新版**逐字节相同**）、
-`.releaserc.json`、`.github/workflows/release.yml`、`.github/workflows/ci.yml`
-（无 `exit 1` 占位，测试命令是真的）。
+已合规（核对过，无需改动）：`AGENTS.md`、`.releaserc.json`、
+`.github/workflows/release.yml`、`.github/workflows/ci.yml`（无 `exit 1` 占位，
+测试命令是真的）。
+
+⚠ **`AGENTS.md` 那条是用 blob SHA 核的，不是 diff**（diff 会因为本地克隆陈旧而误报）：
+本仓 `HEAD:AGENTS.md`、本地克隆的 `origin/main:AGENTS.md`、以及
+`gh api repos/nexform-tech/repo-template/contents/AGENTS.md` 三者同为
+`c45dafeaeff442ff0de60f68e75abf392288624e`。本地克隆的 remote 是
+`yang-dong-yd/repo-template`（fork），与 `release.yml` 里引用的
+`nexform-tech/repo-template` **同内容** —— 这一条只对 `AGENTS.md` 成立，其余文件没核。
 
 本次要补：
 
 | 项 | 处置 |
 |---|---|
-| `pyproject.toml` 的 `version` | `0.1.0` → `0.0.0-semantic-release`（模板 rule 3 / gotcha 6：清单里的 version 是占位符，唯一真源是 git tag） |
+| `pyproject.toml` 的 `version` | `0.1.0` → `0.0.0-semantic-release`（`AGENTS.md` §3「Versioning and Releases」+ `INTEGRATION.md` gotcha 6：清单里的 version 是占位符，唯一真源是 git tag） |
 | `pyproject.toml` 的依赖 | `litearm-python>=0.1.0` → `>=2.1.0`（旧值指向 server 语义那份） |
 | `ci.yml` | 保持 `litearm-python @ git+https://github.com/nexform-tech/litearm-python`（它不在 PyPI 上）；确认与新版 `pyproject` 一致 |
 | `README.md` / `README.zh-CN.md` | 重写：删 zenoh + server，加固件版本要求与 CDC 端口 |
@@ -462,8 +513,9 @@ def test_no_unexpected_arm_kwargs():
 
 - 分支：`feat/port-to-litearm-python-direct-cdc`（大改走分支）
 - **本地提交，不 push**；PR 由仓库所有者开
-- 破坏消费者的提示：`endpoint` / `arm_id` / `use_commander` / `movej_speed` /
-  `settle_s` 五个字段消失 ⇒ 现有配置全部失效
+- 破坏消费者的提示：**六个**配置字段消失或改名 —— `endpoint`、`arm_id`、
+  `use_commander`、`movej_speed`、`settle_s` 消失，`query_timeout` 改名为
+  `move_timeout`（见 §6.1）⇒ 现有配置全部失效
 - 按 repo-template AGENTS.md §3，**不自行写 `BREAKING CHANGE:`**。本仓 tag 只有
   `v0.0.0`，首次 `feat:` 会发 **0.1.0**。若需 1.0.0，由用户明确要求
 
@@ -486,9 +538,10 @@ def test_no_unexpected_arm_kwargs():
 |---|---|
 | 安全关键代码重复 | `slew_target` 在本仓与 `litearm-teleop-isomorphic` 各一份。缓解见 §4.1、§9.3 |
 | 默认速度档偏离上游 | 同构遥操仓用固件表，本仓默认收到通用档（§7.1）。这是**有意**的，不是照抄漏了 |
-| K/B 非本仓实测 | 直接搬同构遥操仓的真机调优值（§8.1）。本仓场景若不同需重标 |
+| K/B 非本仓实测 | 直接搬同构遥操仓 P3 那版（§8.1）。**它不是被"↓55%/↓86%"验证过的那版**，而且那份调参的场景是主从遥操、不是策略回放 ⇒ 本仓只能当"起点" |
 | `0x08` 两条锁存豁免 | 拿不掉（PC 侧无开关）。已按 §7.3 写清精确边界与残余风险 |
-| `move_js` 通道 | 已实现但非默认；它的 `dq` 静默失败风险与出厂增益均**未在本仓验证** |
+| `move_js` 通道 | 已实现但非默认；它的 `dq` 静默失败风险、出厂增益（含 `0x08` 拿不到的 `kd_extra`）均**未在本仓验证** |
+| 台账不在本仓 | 组织唯一的调参台账在 `/home/llx/litearm-stm32/tools/PARAM_STATE.md`；本仓不建第二本，登记条目见 §8.2，由用户落到那份里 |
 
 ## 附录 A：固件源码依据索引
 
@@ -502,11 +555,13 @@ def test_no_unexpected_arm_kwargs():
 | `joint_follow` 的前馈不挂 `builtin_mode` | `control_loop.c:2108` |
 | `builtin_mode` 白名单（仅 `MOVE_J`、`MOVE_JS` 且无用户 `tau_ff`） | `control_loop.c:2522` |
 | `MOVE_JS` 分支（`kp_s=mit_kp`、`tau_u` 由 `s_js_user_ff` 决定） | `control_loop.c:2270`、`:2279` |
+| `kd_extra` 加在 τ 域、且**在 `builtin_mode` 块内** ⇒ `0x03` 有、`0x08` 无 | `control_loop.c:2633`（块自 `:2577`） |
+| `MIT_KP_MAX=500.0f` / `MIT_KD_MAX=5.0f` 的线格式硬上限 | `control_loop.c:44-45` |
 | `slew_linear` 两级串联的那一级 | `control_loop.c:2417` |
 | `ctrl_joint_follow_active` 的定义与带 `!hold` 的返回 | `control_loop.c:674`、`:684-685` |
 | `hold` 的两个来源（fail-soft 下垂 vs 刚性持位） | `control_loop.c:1942-1945` |
 | `safety_check` → 整臂 `EMERGENCY` + 失能 | `control_loop.c:1868` |
 | 两条判据的豁免门 | `User/litearm/safety/safety_check.c:162` |
-| 看门狗超时 0.1 s | `User/litearm/params/defaults.c:48` |
+| 看门狗超时 0.1 s（**7J 那张表**；`:48` 是 1J 台架表，值相同） | `User/litearm/params/defaults.c:172` |
 | 逐关节出厂值（`mit_kp`/`mit_kd`/`kd_extra`/`tau_max`/`speed_limit`/`vel_max`） | `params/defaults.c:65-124` |
 | `MOVE_J` 自动 kick 看门狗（其余模式不踢，保留断连 fail-soft） | `control_loop.c:1938-1939` |
