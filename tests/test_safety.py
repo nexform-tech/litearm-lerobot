@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import pytest
 
@@ -171,3 +172,79 @@ def test_slew_decelerates_before_target():
         q_cmd, dq_cmd = slew_target([0.3], q_cmd, dq_cmd, sp, ac, dt)
         assert q_cmd[0] <= 0.3 + 1e-12, "冲过了目标"
     assert q_cmd[0] == pytest.approx(0.3, abs=1e-12)
+
+
+# ── 与 pylitearm 原版逐拍对拍 ──────────────────────────────────────────────
+#
+# ⚠ 参照物必须是**原版**（`pylitearm`），不是 `litearm-teleop-isomorphic`
+#   —— 后者与本仓是同一个算法的两份副本，拿它当参照等于自己对自己。
+
+PYLITEARM_SLEW = "/home/llx/pylitearm/src/pylitearm/control/joint_follow.py"
+
+#: 参照物是**本机绝对路径**上的另一份仓，CI/别的机器上没有 ⇒ 无条件挂 skipif，
+#: 让文件在任何机器上都成立（不靠"撞上 FileNotFoundError 再补"）。
+pytestmark_skip = pytest.mark.skipif(
+    not os.path.exists(PYLITEARM_SLEW),
+    reason=(
+        "the pylitearm original is not present at "
+        f"{PYLITEARM_SLEW}; this parity check cannot run here. "
+        "CI skips it — see the note in the plan."
+    ),
+)
+
+
+def _load_reference_slew():
+    """从 pylitearm 原版源码里把 `slew_target` 抠出来编译。
+
+    不 import pylitearm（它会拖一整套 SDK）。用 `ast` 取那个函数节点单独编译，
+    这样参照物是**原版的源码本身**，不是我抄的诗。
+    """
+    import ast
+
+    with open(PYLITEARM_SLEW) as f:
+        tree = ast.parse(f.read())
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "slew_target":
+            mod = ast.Module(body=[node], type_ignores=[])
+            ns = {"math": math, "N": 7, "clamp": lambda v, lo, hi: max(lo, min(hi, v))}
+            exec(compile(mod, PYLITEARM_SLEW, "exec"), ns)
+            return ns["slew_target"]
+    raise AssertionError(f"在 {PYLITEARM_SLEW} 里找不到 slew_target")
+
+
+@pytest.mark.parametrize(
+    "targets",
+    [
+        [0.3] * 7,                       # 阶跃
+        [0.0, 0.5, -0.4, 0.2, 0.0, 0.0, 0.0],
+        [-1.2, 0.9, 0.0, -0.7, 0.3, -0.1, 0.0],
+    ],
+)
+@pytestmark_skip
+def test_slew_matches_pylitearm_reference(targets):
+    ref = _load_reference_slew()
+    sp = [2.0, 2.0, 1.75, 1.75, 2.0, 2.0, 2.0]
+    ac = [8.0, 8.0, 7.0, 7.0, 9.0, 9.0, 9.0]
+    dt = 1.0 / 250.0
+
+    q_mine, dq_mine = [0.0] * 7, [0.0] * 7
+    q_ref, dq_ref = [0.0] * 7, [0.0] * 7
+    for tick in range(600):
+        q_mine, dq_mine = slew_target(list(targets), q_mine, dq_mine, sp, ac, dt)
+        q_ref, dq_ref = ref(list(targets), q_ref, dq_ref, sp, ac, dt)
+        assert q_mine == pytest.approx(q_ref, abs=1e-12), f"第 {tick} 拍位置漂了"
+        assert dq_mine == pytest.approx(dq_ref, abs=1e-12), f"第 {tick} 拍速度漂了"
+
+
+@pytestmark_skip
+def test_reference_slew_is_actually_loaded():
+    """判别力：证明上一条不是"两个空函数互相对拍"。
+
+    ⚠ 原版的循环上界是模块常量 `N = 7`（`pylitearm/hal/hardware.py`），
+    传 1 元素列表会 `IndexError` —— 所以这里必须给 7 个。
+    """
+    ref = _load_reference_slew()
+    q, dq = [0.0] * 7, [0.0] * 7
+    q, dq = ref([1.0] * 7, q, dq, [1.0] * 7, [10.0] * 7, 0.01)
+    assert q[0] > 0.0
+    assert dq[0] == pytest.approx(0.1)     # 同上：本拍只到 dv_max = 10 * 0.01
