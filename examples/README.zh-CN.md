@@ -6,6 +6,9 @@
 
 ## 前置
 
+机械臂通过 USB CDC **直连本机**——这条路径上没有 litearm-server。端口按
+VID:PID `1d50:606f` 自动识别；要指定就用 `--port /dev/ttyACM0`。
+
 ```bash
 pip install -e .
 ```
@@ -13,8 +16,7 @@ pip install -e .
 ## 01 —— 读取观测（只读）
 
 ```bash
-python examples/01_read_observation.py \
-  --endpoint tcp/192.168.31.237:7447 --count 5
+python examples/01_read_observation.py --count 5
 ```
 
 打印观测特征与最新关节位置。
@@ -23,17 +25,19 @@ python examples/01_read_observation.py \
 
 ```bash
 python examples/02_send_action.py \
-  --endpoint tcp/192.168.31.237:7447 \
-  --duration 10 --amplitude 0.05 --speed 0.3
+  --duration 10 --amplitude 0.05
 ```
 
 通过 `robot.send_action()` 驱动小幅正弦轨迹。首次运行请把 `--amplitude` 调小。
+
+> **Do not** pass absolute joint angles as the trajectory. That commands the arm
+> across its full range on the first step. Both example 02 and any policy
+> rollout should offset from the pose read at start-up.
 
 ## 03 —— 录制 LeRobotDataset 回合
 
 ```bash
 python examples/03_record_dataset.py \
-  --endpoint tcp/192.168.31.237:7447 \
   --repo-id litearm_demo --root data \
   --episodes 1 --episode-length 50 --task push
 ```
