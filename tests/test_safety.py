@@ -248,3 +248,34 @@ def test_reference_slew_is_actually_loaded():
     q, dq = ref([1.0] * 7, q, dq, [1.0] * 7, [10.0] * 7, 0.01)
     assert q[0] > 0.0
     assert dq[0] == pytest.approx(0.1)     # 同上：本拍只到 dv_max = 10 * 0.01
+
+
+# ── 默认值判据：PC 侧速度表不得越过固件那张专用表 ──────────────────────────
+
+#: 固件 `0x08` 会话的专用走位速度表。**硬编码并注明来源** ——
+#: ⚠ 它是 `static const float`，定义在 `litearm-stm32` `control_loop.c:238`，
+#:   **没有任何头文件声明**；而本仓 CI 从不 checkout 固件仓 ⇒ 只能硬编码。
+#: ⚠ 改固件那张表时必须同步改这里。
+FW_S_JF_VEL_MAX = [2.8, 3.4, 5.0, 5.0, 10.0, 8.0, 13.0]
+
+
+def test_default_speed_limit_stays_under_the_firmware_table():
+    """⚠ 判别力判据。
+
+    PC 侧 slew 与固件 `slew_linear` 是两级串联、**谁小谁算**。PC 侧一旦调到固件
+    表之上，固件那张表就重新成为约束 —— 也就是"速度放开"悄悄回来了。
+    """
+    from litearm_lerobot.servo import DEFAULT_SPEED_LIMIT
+
+    assert len(DEFAULT_SPEED_LIMIT) == len(FW_S_JF_VEL_MAX)
+    for i, (pc, fw) in enumerate(zip(DEFAULT_SPEED_LIMIT, FW_S_JF_VEL_MAX)):
+        assert pc <= fw, f"J{i + 1}: PC 侧 {pc} 越过固件 {fw}"
+
+
+def test_firmware_table_values_are_the_ones_we_think_they_are():
+    """判别力：证明上一条不是"两个空表比大小"。"""
+    assert FW_S_JF_VEL_MAX[0] == 2.8
+    assert FW_S_JF_VEL_MAX[-1] == 13.0
+    from litearm_lerobot.servo import DEFAULT_SPEED_LIMIT
+
+    assert max(DEFAULT_SPEED_LIMIT) < max(FW_S_JF_VEL_MAX), "默认档应当更保守"
