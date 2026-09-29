@@ -43,15 +43,15 @@ python -m pytest tests/ -q
 | `port` | `None` | CDC 端口。`None` = 按 VID:PID `1d50:606f` 自动找。别写死 `/dev/ttyACM0`：端口编号会在重启之间互换。 |
 | `move_timeout` | `15.0` | 单次阻塞 `movej` 的超时（秒）。`movej` 到位即提前返回，所以这只是上限。 |
 | `num_joints` | `7` | 关节数，连接后与 `arm.n` 对账。不符会在任何运动之前就抛。1J 台架板报 `1`。 |
-| `servo_hz` | `250.0` | 伺服环节拍（Hz）。它直接进 `slew_target` 的 `dt`，必须接近真实周期——取值偏高会过冲，偏低会跟不上。 |
+| `servo_hz` | `250.0` | 伺服环节拍（Hz）。它直接进 `slew_target` 的 `dt`，应接近真实周期。⚠ 取值**偏高**不会过冲：掉帧时循环会重锚，于是参考每个真实秒推进得更少、臂比预期**更慢**。这个错法方向是安全的。 |
 | `actuator` | `"joint_follow"` | 固件通道：`"joint_follow"`（`0x08`）或 `"move_js"`（`0x03`）。见[执行器选型](#执行器选型)。 |
 | `k_p` | `None` | 逐关节位置增益。`None` = 内置表。`actuator="move_js"` 时被忽略，并在 `connect()` 时告警。 |
 | `k_d` | `None` | 逐关节阻尼增益。`None` = 内置表。忽略方式同上。 |
 | `speed_limit` | `None` | 逐关节速度上限（rad/s）。`None` = 保守的通用档。 |
 | `accel_limit` | `None` | 逐关节加速度上限（rad/s²）。`None` = 保守的通用档。 |
-| `engage_sec` | `0.3` | 伺服环接管时，固件把托举刚度爬升上去所用的秒数。 |
+| `engage_sec` | `0.3` | 接管时先以低增益托住实测位姿的秒数。这一段跑在**上位机**的伺服循环里，不是固件。 |
 | `limit_margin` | `0.01` | 软限位内缩量（rad）。**不能调大**——见[不要](#不要)。 |
-| `enable_on_connect` | `True` | `connect()` 时调 `enable()`。直连下失败即抛并关上串口：使不上能的臂不会动。 |
+| `enable_on_connect` | `True` | `connect()` 时调 `enable()`。`True`（默认）会起伺服环，失败即抛并关上串口。`False` 是只读会话：不起伺服环，`get_observation()` 照常，`send_action()` 会抛。 |
 | `disable_on_disconnect` | `False` | 改调 `disable()`，而不是用零位移 `movej` 把臂交回。臂会卸力。 |
 
 `validate()` 会拒掉未知的 `actuator`、非正的 `num_joints` / `servo_hz`、负的

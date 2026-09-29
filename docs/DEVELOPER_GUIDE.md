@@ -44,15 +44,15 @@ under the name `litearm`. All fields:
 | `port` | `None` | CDC port. `None` = find it by VID:PID `1d50:606f`. Do not hard-code `/dev/ttyACM0`; the port numbers swap between boots. |
 | `move_timeout` | `15.0` | Timeout for one blocking `movej`, in seconds. `movej` returns early once it settles, so this is only a ceiling. |
 | `num_joints` | `7` | Joint count, checked against `arm.n` on `connect()`. A mismatch raises before anything moves. The 1J bench board reports `1`. |
-| `servo_hz` | `250.0` | Servo loop rate in Hz. It feeds `slew_target`'s `dt`, so it must match the real loop period — a rate that is too high over-slews, one that is too low under-slews. |
+| `servo_hz` | `250.0` | Servo loop rate in Hz. It feeds `slew_target`'s `dt`, so it should match the real loop period. Setting it **higher** than the loop can actually run does not over-slew: the loop re-anchors when it falls behind, so the reference advances less per real second and the arm moves slower than asked. The error direction is safe. |
 | `actuator` | `"joint_follow"` | Firmware channel: `"joint_follow"` (`0x08`) or `"move_js"` (`0x03`). See [send_action and the servo loop](#send_action-and-the-servo-loop). |
 | `k_p` | `None` | Position gains, one per joint. `None` = the built-in table. Ignored, with a warning at `connect()`, when `actuator="move_js"`. |
 | `k_d` | `None` | Damping gains, one per joint. `None` = the built-in table. Ignored the same way. |
 | `speed_limit` | `None` | Speed ceilings (rad/s), one per joint. `None` = the conservative general table. |
 | `accel_limit` | `None` | Acceleration ceilings (rad/s²), one per joint. `None` = the conservative general table. |
-| `engage_sec` | `0.3` | Seconds the firmware ramps the hold up when the servo loop takes the arm over. |
+| `engage_sec` | `0.3` | Seconds the loop spends holding the measured pose at low gain before it starts following. This runs in the host loop, not in the firmware. |
 | `limit_margin` | `0.01` | Inset applied to the soft limits, in rad. Do not raise it — see [Do not](#do-not). |
-| `enable_on_connect` | `True` | Call `enable()` on `connect()`. Over a direct link a failure raises and closes the port, because an arm that cannot be enabled cannot move. |
+| `enable_on_connect` | `True` | Call `enable()` on `connect()`. `True` (the default) starts the servo loop; a failure raises and closes the port. `False` is an observation-only session: no servo loop, `get_observation()` still works, `send_action()` raises. |
 | `disable_on_disconnect` | `False` | Call `disable()` instead of handing the arm back with a zero-motion `movej`. The arm goes limp. |
 
 `validate()` rejects an unknown `actuator`, a non-positive `num_joints` or

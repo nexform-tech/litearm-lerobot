@@ -220,7 +220,7 @@ PC 送下去的 `q_s` 本身已经是梯形限速的参考，**两级串联谁�
 | `movej_speed: float = 0.5` | **删除** | 由 `speed_limit` 表取代 |
 | `settle_s: float = 0.2` | **删除** | 新 `movej` 自身阻塞到位 |
 | `use_commander: bool = True` | **删除** | 伺服线程是唯一路径 |
-| `enable_on_connect: bool = True` | 保留，但**失败改为抛** | 直连下 enable 失败 = 臂不会动；旧代码吞异常是 server 只读场景的残留 |
+| `enable_on_connect: bool = True` | 保留，但**失败改为抛**；`False` = **只读会话**（不起伺服环，`get_observation()` 照常，`send_action()` 抛） | 直连下 enable 失败 = 臂不会动；旧代码吞异常是 server 只读场景的残留。⚠ `False` 时**不能**起伺服环：固件对未使能的臂直接拒 `joint_follow`（`control_loop.c:966` 的 `if (!g_arm.enabled) return 0x03;`） |
 | `disable_on_disconnect: bool = False` | 保留 | 默认保持使能持位 |
 | — | 新增 `actuator: "joint_follow" \| "move_js" = "joint_follow"` | §5.4 |
 | — | 新增 `k_p` / `k_d`: `list[float] \| None = None` | `None` ⇒ 用 §8 的表 |
@@ -240,7 +240,8 @@ connect()
   2. arm.n 必须 == num_joints，否则抛
   3. limits = read_safe_limits(arm, limit_margin)              # 读不到即抛
   4. enable()  if enable_on_connect                            # 失败即抛，并先 close()
-  5. servo = ServoLoop(...); servo.start()                     # prime 兼作 0x08 能力探针
+  5. servo = ServoLoop(...); servo.start()   # 仅当已使能；prime 兼作 0x08 能力探针
+     （enable_on_connect=False ⇒ 不起伺服环，本次会话只读）
 
 disconnect()   # 幂等
   1. servo.stop()                                              # join
@@ -455,6 +456,13 @@ def test_no_unexpected_arm_kwargs():
 
 ### 9.3 `slew_target` 与上游逐拍对拍
 
+⚠⚠ **这条判据在 CI 上不跑。** 它硬编码
+`/home/llx/pylitearm/src/pylitearm/control/joint_follow.py` 这个**本机绝对路径**，
+而 CI 只 checkout 本仓 ⇒ `skipif` 命中、静默跳过。也就是说 §4.1 那条「三份副本
+靠对拍防漂移」的缓解措施**只在有那台机器的人手里成立**，不是流水线闸门。
+跳过时带 `reason`，所以是**已知缺口**而不是隐藏缺口；补它需要把 pylitearm 带进 CI
+（本次不做）。
+
 对着 **pylitearm 原版**（不是同构遥操仓）的 `joint_follow.py` 逐拍比对，覆盖：
 到目标吸附、制动距离减速、加速度限幅、方向反转。
 
@@ -479,7 +487,11 @@ def test_no_unexpected_arm_kwargs():
 2. 每一拍都调到了 `_send`（往返数 == 拍数，允许 1 拍误差）；
 3. **`dq_cmd` 不全为 0** —— `dq=0` 在 `move_js` 上会让参考冻结、臂纹丝不动且不报错。
    这条是负控的反面：没有它，"循环跑了"与"臂真会动"分不开。
-4. **判据的判据是耗时**：断言实测节拍 ≥ 设定节拍的 0.9 倍。线程若没真跑起来，
+4. **判据的判据是耗时**：断言实测节拍不低于设定的一半（⚠ 实现在
+   `tests/test_servo.py` 里取的是 **0.5×** 而不是本行原先写的 0.9× —— 0.9× 在
+   CI 的抖动下会偶发红，而这一条要挡的是「线程根本没跑起来」那种量级的失效，
+   0.5× 已足够判别。相邻的 `test_one_send_per_tick` 是更强的那条：它能挡住
+   「每拍发两次」与「循环卡住」。线程若没真跑起来，
    前三条的断言可能仍然成立。
 
 ### 9.6 生命周期与收尾

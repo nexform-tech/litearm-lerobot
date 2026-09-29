@@ -2802,13 +2802,35 @@ Expected: `86 passed`（⚠ 抽取树可能因盲区多算一条，见上方警�
 
 - [ ] **Step 2: 确认没有残留的旧 API 引用**
 
+⚠ **判据必须挑关键字形态，不能挑裸词。** 裸 grep `litearm-server` 是**过不了**的，
+而且**不该过** —— 交付物里有大量**正确的**提及：`servo.py` / `safety.py` 的注释写着
+「照 litearm-server 的 `compute_tau_ff`」，README 写着「这条路径上没有 litearm-server」，
+测试里还**故意**带着旧关键字去断言它们被拒。这些都是事实陈述，不是残留。
+
+要挑的是**会真正跑挂的调用形态**：
+
 ```bash
-grep -rn "endpoint\|arm_id\|query_timeout\|use_commander\|movej_speed\|settle_s\|\.hold()\|litearm-server\|zenoh" \
-  src/ tests/ examples/ README.md README.zh-CN.md docs/DEVELOPER_GUIDE.md docs/DEVELOPER_GUIDE.zh-CN.md
+PAT="endpoint=\|arm_id=\|query_timeout=\|use_commander=\|movej_speed=\|settle_s=\|\.hold()"
+
+# ① 硬闸门：交付源码必须零命中（--include=*.py 顺带排除 egg-info 那类生成物）
+grep -rn --include=*.py "$PAT" src/
+
+# ② tests/ examples/ 允许出现在注释与 docstring 里；逐行核一眼
+grep -rn --include=*.py "$PAT" tests/ examples/
 ```
 
-Expected: **零命中**。任何命中都是没改干净。例外：本计划与 spec 文档可以命中
-（它们是历史记录），所以上面这个命令**不含** `docs/superpowers/`。
+Expected：
+
+- ① **零命中**。有命中就是没改干净。
+- ② 实测只剩 **2 处**，都在 `tests/test_sdk_contract.py` 的 docstring 里，
+  讲的正是"旧代码这么做、真 SDK 不认"（形如 `"""旧 robot.py 在收尾调 arm.hold() …"""`）。
+  **判据 = 每一处命中所在行都含 `#` 或 `"""`**。出现第三处、或出现在可执行代码里 ⇒ 没改干净。
+
+⚠ `src/litearm_lerobot.egg-info/` 是 **gitignore 的本机构建产物**（旧 README 的快照），
+里面会大面积命中 —— 它没被 git 跟踪，`pip install -e .` 会重生成。`--include=*.py` 把它
+排除掉是**有意的**，不是漏掉。
+
+（`docs/superpowers/` 下的计划与 spec 不参与 —— 它们是历史记录，本来就该提到旧架构。）
 
 - [ ] **Step 3: 确认提交历史干净**
 
