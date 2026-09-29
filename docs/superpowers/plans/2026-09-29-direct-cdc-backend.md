@@ -2495,12 +2495,13 @@ def main():
 
     cfg = LiteArmRobotConfig(port=args.port)
     with LiteArmRobot(cfg) as robot:
-        q0 = list(robot.get_observation()["observation.state"])   # 起点
+        q0 = list(robot.get_observation()["observation.state"])   # start pose
         print(f"start pose: {[round(v, 4) for v in q0]}")
         start = time.monotonic()
         while time.monotonic() - start < args.duration:
             t = time.monotonic() - start
-            # ⚠ 从**实测起点**偏移，不是把全轴设成同一个绝对值
+            # Offset from the MEASURED start pose. Passing an absolute joint
+            # vector would send the arm across its whole range on the first step.
             q = list(q0)
             q[0] += args.amplitude * math.sin(0.5 * t)
             robot.send_action({"action": q})
@@ -2537,13 +2538,35 @@ if __name__ == "__main__":
 > **Do not** pass absolute joint angles as the trajectory. That commands the arm
 > across its full range on the first step. Both example 02 and any policy
 > rollout should offset from the pose read at start-up.
-```
 
-- [ ] **Step 6: 跑一遍只读示例自检（无臂时应给出清晰的连接错误）**
+
+`README.zh-CN.md` 用对应的中文块（**不要**照抄英文那份）：
+
+```markdown
+> **不要**把绝对关节角当成轨迹传进去 —— 那会在第一步就把机械臂甩过整个行程。
+> 示例 02 与任何策略回放都应从**启动时读到的位姿**偏移。
+``````
+
+- [ ] **Step 6: 跑一遍只读示例自检（错误必须是**单行清晰**的 `TransportError`）**
 
 Run: `/usr/bin/python3 examples/01_read_observation.py --count 1`
-Expected: 抛 `TransportError: 未找到 STM32 CDC (VID:PID 1d50:606f), 请用 --port 指定`
-—— 这是**预期**的（本机此刻没接臂）。要点是**错误清晰**，不是 traceback 里一堆 None。
+
+Expected 是**两支之一**，取决于本机此刻插没插臂：
+
+| 本机状态 | 期望 |
+|---|---|
+| 没有 STM32 CDC 设备 | `TransportError: 未找到 STM32 CDC (VID:PID 1d50:606f), 请用 --port 指定` |
+| 有设备、但被别的进程占着 | `TransportError: 打开串口 /dev/ttyACMn 失败: ... Could not exclusively lock port ...` |
+
+判断的要点是**错误清晰**（单行 `TransportError`，而不是 traceback 里一堆 `None`），
+不是命中哪一支。
+
+⛔⛔ **别为了"让这一支跑出来"去拔/占用别人的口。** STM32 CDC 口在 Linux 上
+**不独占** —— 第二个进程会**分吃同一个字节流**，两边一起坏（本组织实测过）。若设备
+存在但被占，看到的就是上面第二支；**直接放过这一步，不要去抢**。
+
+⛔ **也不要拿这一步当真机验收**。它只证明"连接失败时错误可读"。真机验收在
+spec §11.2，需要人在场、手边有急停。
 
 - [ ] **Step 7: 提交**
 

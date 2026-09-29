@@ -30,9 +30,8 @@ python examples/02_send_action.py \
 
 通过 `robot.send_action()` 驱动小幅正弦轨迹。首次运行请把 `--amplitude` 调小。
 
-> **Do not** pass absolute joint angles as the trajectory. That commands the arm
-> across its full range on the first step. Both example 02 and any policy
-> rollout should offset from the pose read at start-up.
+> **不要**把绝对关节角当成轨迹传进去 —— 那会在第一步就把机械臂甩过整个行程。
+> 示例 02 与任何策略回放都应从**启动时读到的位姿**偏移。
 
 ## 03 —— 录制 LeRobotDataset 回合
 

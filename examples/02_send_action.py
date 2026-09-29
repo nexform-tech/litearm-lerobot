@@ -29,12 +29,13 @@ def main():
 
     cfg = LiteArmRobotConfig(port=args.port)
     with LiteArmRobot(cfg) as robot:
-        q0 = list(robot.get_observation()["observation.state"])   # 起点
+        q0 = list(robot.get_observation()["observation.state"])   # start pose
         print(f"start pose: {[round(v, 4) for v in q0]}")
         start = time.monotonic()
         while time.monotonic() - start < args.duration:
             t = time.monotonic() - start
-            # ⚠ 从**实测起点**偏移，不是把全轴设成同一个绝对值
+            # Offset from the MEASURED start pose. Passing an absolute joint
+            # vector would send the arm across its whole range on the first step.
             q = list(q0)
             q[0] += args.amplitude * math.sin(0.5 * t)
             robot.send_action({"action": q})
