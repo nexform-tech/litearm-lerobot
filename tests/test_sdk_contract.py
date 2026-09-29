@@ -99,6 +99,30 @@ def test_joint_param_exposes_limits():
         assert attr in getattr(JointParam, "__dataclass_fields__", {})
 
 
+def test_real_all_joint_params_returns_a_plain_list_not_an_envelope():
+    """⚠⚠ 返回值**不许**被包进 `Msg`（或其他任何有 `.value` 的信封）。
+
+    `safety.read_safe_limits` 直接迭代这个返回值（`for p in jp`），
+    它与 `get_state()` 那条**读帧**路径不同：`all_joint_params()` 是"取一批
+    参数"，旧 SDK 里它是裸 `list`。一旦变成信封，`connect()` 会在真机上炸，
+    而离线套件照样全绿 —— 正是本移植要修的那类漂移。
+
+    期望值全部取自真 SDK：**从签名读**，不从本仓实现读。
+    """
+    import typing
+
+    from litearm.params import JointParams
+
+    ret = inspect.signature(JointParams.all_joint_params).return_annotation
+    assert ret is not inspect.Signature.empty, "all_joint_params 没标返回类型"
+    text = str(ret)
+    assert "Msg" not in text, f"返回值被信封包住了：{text}"
+    assert "list" in text, f"返回值不是 list：{text}"
+    # ⚠ 字符串标注 `"list"` 与"其实是 Msg"靠文本分不清 ⇒ 解到真类型再判一次
+    resolved = typing.get_type_hints(JointParams.all_joint_params).get("return")
+    assert resolved is list, f"解出来的返回类型是 {resolved!r}，不是 list"
+
+
 def test_find_cdc_port_is_exported():
     """`port=None` 时我们要靠它自动找口。"""
     assert callable(litearm.find_cdc_port)

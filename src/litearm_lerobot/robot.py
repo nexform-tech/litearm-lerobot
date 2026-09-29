@@ -52,6 +52,9 @@ class LiteArmRobot(Robot):
         self._arm: Optional[litearm.Arm] = None
         self._servo: Optional[ServoLoop] = None
         self._limits = None
+        #: 本次会话是否**真的使能过**电机。`False` ⇒ 只读会话：没有伺服环，
+        #: 也**不能**发 `movej`（未使能时同样被固件拒）。见 `connect()`。
+        self._enabled = False
 
     # ── LeRobot feature metadata ─────────────────────────────────────────────
 
@@ -71,6 +74,12 @@ class LiteArmRobot(Robot):
 
     def connect(self, calibrate: bool = True) -> None:
         """Open the CDC link, read the limits, enable, and start the servo loop.
+
+        ``enable_on_connect=False`` opens a genuine **observation-only** session:
+        the motors are left disabled, nothing is ever commanded, and the servo
+        loop is not started (reading ``get_observation()`` needs the firmware's
+        passive status stream, not an enabled arm). ``send_action`` raises in
+        that mode.
 
         Raises on any failure and leaves the link closed — a half-open session
         with an arm that will not move is worse than a loud exception.
@@ -106,18 +115,26 @@ class LiteArmRobot(Robot):
 
         self._arm = arm
         self._limits = limits
-        self._servo = ServoLoop(
-            arm,
-            limits,
-            actuator=self.config.actuator,
-            hz=self.config.servo_hz,
-            k_p=self.config.k_p,
-            k_d=self.config.k_d,
-            speed_limit=self.config.speed_limit,
-            accel_limit=self.config.accel_limit,
-            engage_sec=self.config.engage_sec,
-        )
-        self._servo.start()
+        # ⚠⚠ 只有**真的使能过**才起伺服环。
+        #   `0x08`(joint_follow) / `0x03`(move_js) 的首帧在未使能时会被固件**整帧
+        #   拒**（`litearm-stm32` `control/control_loop.c:966`：
+        #   `if (!g_arm.enabled) return 0x03;`）⇒ 线程第一拍就抛，之后每个
+        #   `get_observation()` / `send_action()` 都跟着炸。
+        #   ⛔ 别再无条件 `start()`：那会让"只读会话"变成一个必定失败的会话。
+        self._enabled = bool(self.config.enable_on_connect)
+        if self._enabled:
+            self._servo = ServoLoop(
+                arm,
+                limits,
+                actuator=self.config.actuator,
+                hz=self.config.servo_hz,
+                k_p=self.config.k_p,
+                k_d=self.config.k_d,
+                speed_limit=self.config.speed_limit,
+                accel_limit=self.config.accel_limit,
+                engage_sec=self.config.engage_sec,
+            )
+            self._servo.start()
         if calibrate:
             self.calibrate()
 
@@ -125,6 +142,11 @@ class LiteArmRobot(Robot):
     def is_calibrated(self) -> bool:
         # Absolute encoders are read directly from the arm controller: no homing.
         return True
+
+    @property
+    def is_enabled(self) -> bool:
+        """本次会话是否使能过电机（即是否存在伺服环）。"""
+        return self._enabled
 
     def calibrate(self) -> None:
         """No-op — the LiteArm reports absolute joint positions."""
@@ -161,6 +183,15 @@ class LiteArmRobot(Robot):
     def send_action(self, action: Dict[str, Any]) -> Dict[str, Any]:
         if not self.is_connected:
             raise RuntimeError("LiteArmRobot is not connected")
+        if self._servo is None:
+            # ⛔ 不静默收下：没有伺服环 ⇒ 这条动作永远不会被执行。也**不**在这里
+            #   偷偷 enable + 起环 —— 那正好绕开用户显式选的只读模式。
+            raise RuntimeError(
+                "LiteArmRobot 未使能（enable_on_connect=False）—— 伺服环没有启动，"
+                "send_action 无处可发。要下发动作请用 enable_on_connect=True 重建"
+                "会话（此时 connect() 会 arm.enable() 并起伺服环）；只读观测不需要"
+                "使能，get_observation() 照常可用。"
+            )
         self._raise_if_servo_died()
         if "action" not in action:
             raise ValueError("action dict must contain an 'action' key")
@@ -191,13 +222,43 @@ class LiteArmRobot(Robot):
         """
         servo, self._servo = self._servo, None
         arm, self._arm = self._arm, None
+        enabled, self._enabled = self._enabled, False
+        stopped = True
         if servo is not None:
-            servo.stop()
+            # ⚠ join 必须**盖住**交接：线程可能正卡在自己的 hold_at_current 里，
+            #   而那条 movej 最长阻塞 `move_timeout`。2 s 的 join 会在那种情形下
+            #   直接放弃，然后我们就在**同一个会话**上再发一条 movej —— 两条命令
+            #   抢同一个 `(id, echo_cmd)` 应答队列、各自清掉对方的 ACK，而
+            #   `close()` 落在飞行中 ⇒ 最坏是臂仍在伺服态而链路已关（0.1 s 后
+            #   看门狗 fail-soft），正是"绝不 disable"这套设计要躲的结果。
+            stopped = servo.stop(timeout=self.config.move_timeout + 2.0)
+            if not stopped:
+                log.error(
+                    "伺服线程在 %.1f s 内没有停下 —— 臂**可能仍在伺服态**，"
+                    "本函数不再重复接管（那会与它的 movej 抢应答队列）。"
+                    "链路即将关闭，固件 0.1 s 看门狗会把它 fail-soft（下垂）。",
+                    self.config.move_timeout + 2.0)
         if arm is None:
             return
         try:
             if self.config.disable_on_disconnect:
                 arm.disable()
+            elif not enabled:
+                # 未使能 ⇒ `movej` 会被固件同一条 0x03 整帧拒，接管本就做不到。
+                # 只读会话的臂从未被指挥过，也没什么可交还的。
+                log.debug("只读会话（未使能）：跳过收尾接管")
+            elif servo is not None and servo.error is not None:
+                # ⚠ `error` 是**在接管之后**才置的（见 ServoLoop._run）⇒ 它非 None
+                #   就是"伺服环已经 movej 交还过了"的信号。再接管一次 = 上面那条
+                #   并发 movej 的坏结局。不重复交还。
+                log.info("伺服环已自行受控接管（movej 回当前实测位姿），收尾不重复接管")
+            elif not stopped:
+                # ⚠ 上面那两条判据**都不覆盖**"线程还活着、正卡在自己的
+                #   hold_at_current 里"这一刻（那时 `error` 还没置）。判据还是同一个：
+                #   线程活着 ⇒ 本函数与它共用一条 `(id, echo_cmd)` 应答队列 ⇒
+                #   不发第二条 movej。不接管只是让它 fail-soft（下垂），
+                #   接管则是下垂 **加** 应答错乱。
+                log.error("伺服线程未停 —— 跳过收尾接管（见上一条错误日志）")
             else:
                 hold_at_current(arm)
         except Exception:                     # noqa: BLE001

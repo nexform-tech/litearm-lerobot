@@ -28,7 +28,7 @@ import threading
 import time
 from typing import List, Optional, Sequence
 
-from .safety import Limits, slew_target
+from .safety import Limits, clamp_to_limits, slew_target
 
 log = logging.getLogger(__name__)
 
@@ -201,22 +201,39 @@ class ServoLoop:
             target=self._run, daemon=True, name="litearm-servo")
         self._thread.start()
 
-    def stop(self) -> None:
-        """停线程并 join。**幂等**。"""
+    def stop(self, timeout: float = 2.0) -> bool:
+        """停线程并 join，返回**线程是否真的停了**。**幂等**。
+
+        ⚠ 返回 `False` 时线程还在跑 —— 它可能正卡在自己的 `hold_at_current`
+        里，而那条 `movej` 最长阻塞 `move_timeout`。收尾方**必须**看这个返回值：
+        再发一条 `movej` 就是两条命令抢同一个 `(id, echo_cmd)` 应答队列。
+
+        ⚠ `timeout` 是**每次** join 的上限，不是"总预算"；在没停下之前
+        `self._thread` 保持非空，所以重复调用会如实重复报 `False`。
+        """
         self._stop.set()
         th = self._thread
-        if th is not None:
-            th.join(timeout=2.0)
-            if th.is_alive():
-                log.warning(
-                    "伺服线程 2 s 内没停下 —— 臂可能仍在伺服态。"
-                    "固件 0.1 s 看门狗会在断流后 fail-soft。")
+        if th is None:
+            return True
+        th.join(timeout=timeout)
+        if th.is_alive():
+            log.warning(
+                "伺服线程 %.1f s 内没停下 —— 臂可能仍在伺服态。"
+                "固件 0.1 s 看门狗会在断流后 fail-soft。", timeout)
+            return False
         self._thread = None
+        return True
 
     def set_target(self, q: Sequence[float]) -> None:
-        """更新目标（非阻塞）。"""
+        """更新目标（非阻塞）。
+
+        ⚠ 这里**也**过第一层软限位（spec §7.2）—— 限位不该只在 `send_action`
+        那条路上成立，`set_target` 是公开 API（见 `__all__`）。这层是**防御
+        纵深**，静默：告警由 `send_action` 发（那里看得见调用方的原始输入）。
+        """
+        clamped, _ = clamp_to_limits(q, self._limits)
         with self._lock:
-            self._target = [float(v) for v in q]
+            self._target = clamped
 
     # ── 线程体 ──────────────────────────────────────────────────────────
     def _run(self) -> None:

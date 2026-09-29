@@ -1,6 +1,7 @@
 """LiteArmRobot 生命周期测试。"""
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -107,6 +108,66 @@ def test_move_js_plus_explicit_gains_warns(make_robot, caplog):
                    for r in caplog.records), "该告警没发"
     finally:
         robot.disconnect()
+
+
+# ── 只读会话（enable_on_connect=False） ────────────────────────────────────
+
+def test_no_enable_connect_never_commands_the_arm(make_robot):
+    """`enable_on_connect=False` 是**真·只读**会话：伺服环不起，一拍都不发。
+
+    ⚠ 回归墓碑：旧实现照样起伺服环，而 `0x08` 首帧在未使能时被固件整帧拒
+    （`control_loop.c:966` `if (!g_arm.enabled) return 0x03;`）⇒ 线程第一拍就死，
+    之后每个 `get_observation` / `send_action` 都抛。只读模式必须真的不动臂。
+    """
+    robot, arm = make_robot(enable_on_connect=False)
+    robot.connect()
+    try:
+        assert not arm.calls_named("enable"), "只读模式不许调 enable"
+        assert not arm.enabled
+        time.sleep(0.25)          # 250 Hz 下够发 ~60 拍
+        assert not arm.calls_named("joint_follow"), "只读模式发了伺服帧"
+        assert not arm.calls_named("move_js"), "只读模式发了 move_js"
+        assert not arm.calls_named("movej"), "只读模式发了 movej"
+    finally:
+        robot.disconnect()
+
+
+def test_no_enable_connect_still_reads_observations(make_robot):
+    """读观测**不需要**使能 —— `get_state()` 吃的是固件的被动状态流。"""
+    robot, arm = make_robot(enable_on_connect=False)
+    arm.q = [0.11, 0.22, 0.33, 0.0, 0.0, 0.0, 0.0]
+    robot.connect()
+    try:
+        obs = robot.get_observation()
+        assert obs["observation.state"] == pytest.approx(arm.q)
+        assert robot.is_connected
+    finally:
+        robot.disconnect()
+
+
+def test_send_action_without_enable_raises_and_says_how(make_robot):
+    """没有伺服环就不能静默收下动作 —— 必须说明是**没使能**、以及怎么改。"""
+    robot, arm = make_robot(enable_on_connect=False)
+    robot.connect()
+    try:
+        with pytest.raises(RuntimeError) as ei:
+            robot.send_action({"action": [0.0] * 7})
+        msg = str(ei.value)
+        assert "enable" in msg.lower() or "使能" in msg, f"消息没说清原因：{msg}"
+        time.sleep(0.15)
+        assert not arm.calls_named("joint_follow"), "抛异常后仍发了帧"
+    finally:
+        robot.disconnect()
+
+
+def test_disconnect_without_enable_issues_no_movej_and_closes(make_robot):
+    """未使能时 `movej` 会被固件同一条 0x03 拒掉 ⇒ 收尾不许试，但链路要关。"""
+    robot, arm = make_robot(enable_on_connect=False)
+    robot.connect()
+    robot.disconnect()
+    assert arm.closed, "只读会话也必须把链路收干净"
+    assert not arm.calls_named("movej"), "未使能时的 movej 必被拒，不该发"
+    assert robot.is_connected is False
 
 
 # ── 观测 ───────────────────────────────────────────────────────────────────
@@ -222,6 +283,51 @@ def test_disconnect_is_idempotent(make_robot):
     robot.connect()
     robot.disconnect()
     robot.disconnect()
+
+
+def test_disconnect_does_not_hold_twice_after_the_servo_took_over(make_robot):
+    """伺服环死时会**自己**接管（`movej` 回当前实测位姿）。
+
+    收尾再接管一次 = 两条 `movej` 抢同一个 `(id, echo_cmd)` 应答队列、各自清掉
+    对方的 ACK，而 `close()` 落在飞行中 —— 最坏是臂**仍在伺服态而链路已关**，
+    0.1 s 看门狗 fail-soft。`servo.error` 非 None 就是"接管已经做过"的信号。
+    """
+    robot, arm = make_robot()
+    robot.connect()
+    arm.raise_on["joint_follow"] = RuntimeError("链路坏")
+    assert _wait(lambda: robot._servo.error is not None), "伺服环没死"
+    assert len(arm.calls_named("movej")) == 1, "伺服环自己应已接管一次"
+    robot.disconnect()
+    assert len(arm.calls_named("movej")) == 1, "收尾**不该**再接管一次"
+    assert arm.closed
+    assert robot.is_connected is False
+
+
+def test_disconnect_does_not_race_a_wedged_servo_thread(make_robot):
+    """线程还活着（没停下、`error` 也还没置）时收尾**同样**不许发第二条 `movej`。
+
+    ⚠ 这一格 `servo.error is not None` 判据盖不住：`error` 是线程**做完接管之后**
+    才置的，而那之前它可能正卡在自己的 `hold_at_current` 里。判据是"线程活着 ⇒
+    两条 movej 会共用一条 `(id, echo_cmd)` 应答队列"。
+    """
+    robot, arm = make_robot(move_timeout=0.05)     # join 预算 = 0.05 + 2.0 s
+    release = threading.Event()
+    entered = threading.Event()
+
+    def _blocked(*args, **kwargs):
+        entered.set()
+        release.wait(5.0)                          # 装成"卡在一次阻塞下发里"
+
+    arm.joint_follow = _blocked                    # 实例属性盖住类方法
+    robot.connect()
+    try:
+        assert entered.wait(2.0), "伺服线程没进到那次下发里"
+        robot.disconnect()
+        assert not arm.calls_named("movej"), "线程还活着却发了第二条 movej"
+        assert arm.closed
+        assert robot.is_connected is False
+    finally:
+        release.set()
 
 
 def test_disconnect_survives_a_failing_hold(make_robot):

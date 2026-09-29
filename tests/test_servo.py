@@ -1,6 +1,7 @@
 """伺服环测试 —— 重点在**判别力**：判据必须能区分"循环跑了"与"臂真会动"。"""
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -73,10 +74,14 @@ def test_engage_holds_at_current_pose_with_soft_gains(fake_arm):
 # ── 目标跟踪 ───────────────────────────────────────────────────────────────
 
 def test_reference_converges_to_target(fake_arm):
+    """⚠ 目标必须落在**每一轴**的软限位内：J4 的固件上端只有 +0.0175，
+    `read_safe_limits` 内缩后是 +0.0075。（旧版用 `[0.5]*7` 之所以"收敛"，
+    是因为那时伺服环**不钳位** —— 那条目标本来就超限、根本发不出去。
+    钳位加在 `set_target` 之后，超限目标会收敛到钳位值 ⇒ 收敛性要用合法目标测。）"""
     loop = _loop(fake_arm)
     loop.start()
     try:
-        target = [0.5] * 7
+        target = [0.005] * 7
         loop.set_target(target)
         assert _wait(
             lambda: loop.q_cmd is not None
@@ -208,7 +213,74 @@ def test_stop_is_idempotent(fake_arm):
 
 def test_stop_without_start_is_a_noop(fake_arm):
     loop = _loop(fake_arm)
-    loop.stop()
+    assert loop.stop() is True, "没起过线程 = 已经停了"
+
+
+def test_stop_reports_that_a_running_thread_stopped(fake_arm):
+    loop = _loop(fake_arm)
+    loop.start()
+    assert loop.stop(timeout=2.0) is True
+
+
+def test_stop_returns_false_when_the_thread_is_stuck_in_a_send(fake_arm):
+    """⚠ 返回值必须有判别力：线程卡在 `movej` 里（最长 `move_timeout`）时，
+    `stop()` 必须**如实**说没停下 —— `robot.disconnect()` 靠这个返回值决定
+    怎么收场。旧签名返回 `None`，收尾只能靠猜。
+    """
+    release = threading.Event()
+
+    def _blocked(*args, **kwargs):
+        release.wait(5.0)               # 装成"卡在一次阻塞下发里"
+
+    fake_arm.joint_follow = _blocked     # 实例属性盖住类方法
+    loop = _loop(fake_arm)
+    loop.start()
+    try:
+        time.sleep(0.05)                 # 让线程进到那次阻塞下发里
+        assert loop.stop(timeout=0.2) is False, "线程明明还活着，却报了已停"
+        release.set()
+        assert loop.stop(timeout=2.0) is True, "放行后线程应能停下"
+    finally:
+        release.set()
+        loop.stop(timeout=2.0)
+
+
+# ── set_target 的限位（defence in depth） ──────────────────────────────────
+
+def test_set_target_clamps_before_it_reaches_the_wire(fake_arm):
+    """spec §7.2 的"第一层限位"必须对**任何调用方**成立。
+
+    `set_target` 是公开 API（在 `servo.__all__` 里），旧实现只在 `send_action`
+    那条路上钳位 ⇒ 直接调 `set_target` 就能把超限目标喂进 `_send`。
+    """
+    limits = read_safe_limits(fake_arm)
+    loop = _loop(fake_arm)
+    loop.start()
+    try:
+        loop.set_target([5.0] * 7)       # 逐轴超限（J4 上端只有 0.0075）
+        assert _wait(
+            lambda: loop.q_cmd is not None
+            and max(abs(a - b) for a, b in zip(loop.q_cmd, limits.hi)) < 1e-3,
+            timeout=3.0,
+        ), f"没收敛到钳位后的目标（实际 {loop.q_cmd}）"
+    finally:
+        loop.stop()
+    sent = fake_arm.calls_named("joint_follow")
+    assert sent, "一发都没下发"
+    for _, q, _, _, _ in sent:
+        for i, (v, hi) in enumerate(zip(q, limits.hi)):
+            assert v <= hi + 1e-9, f"第 {i} 轴越过软限位：{v} > {hi}"
+
+
+def test_set_target_clamp_is_silent(fake_arm, caplog):
+    """⚠ 钳位由 `send_action` 负责告警（那里看得见原始输入）；
+    伺服环这层是**防御纵深**，不该重复刷屏。"""
+    loop = _loop(fake_arm)
+    with caplog.at_level("WARNING"):
+        loop.set_target([5.0] * 7)
+    assert not [r for r in caplog.records if r.name.startswith("litearm_lerobot")], (
+        "set_target 的钳位不该自己告警"
+    )
 
 
 # ── hold_at_current ────────────────────────────────────────────────────────

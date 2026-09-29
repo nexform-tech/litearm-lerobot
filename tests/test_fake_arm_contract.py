@@ -49,3 +49,16 @@ def test_fake_arm_exposes_params_all_joint_params():
     for p in jps:
         assert hasattr(p, "q_min") and hasattr(p, "q_max")
         assert p.q_min < p.q_max
+
+
+def test_fake_arm_all_joint_params_is_a_list_not_an_envelope():
+    """⚠ 假臂不许在这儿多加一层 `.value` 信封。
+
+    真 SDK 的 `all_joint_params()` 返回裸 `list`（判据在
+    `test_sdk_contract.py::test_real_all_joint_params_returns_a_plain_list_not_an_envelope`），
+    而 `safety.read_safe_limits` 直接迭代它。旧套件只在**假臂自己**身上对账，
+    真 SDK 那侧从没被问过 —— 假臂一旦加信封，离线照样绿、真机才响。
+    """
+    jps = FakeArm().params.all_joint_params()
+    assert isinstance(jps, list), f"all_joint_params 返回 {type(jps)!r}，不是 list"
+    assert not hasattr(jps, "value"), "返回值被包成了带 .value 的信封"
