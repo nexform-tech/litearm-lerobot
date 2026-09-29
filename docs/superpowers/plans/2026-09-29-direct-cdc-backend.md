@@ -30,6 +30,10 @@
 5. **`limit_margin = 0.01` 不能调大**：J4 的固件上端只有 `+0.017547 rad`，取 0.02 就把 J4 正半轴抹掉，而且**不报错**（见 Task 1 的判据）。
 6. 提交信息一律 Conventional Commits、**英文**、72 字符以内 subject、**绝不出现 `Co-Authored-By` 或任何工具署名**。
 
+**这份计划的代码已经真跑过。** 把本文档里的代码块逐字抽到 `/tmp` 下、对着真
+`litearm` 2.1.0 与 `lerobot` 0.4.4 执行：**87 passed / 0 failed**。抽取方式见
+Task 12 Step 1。若你照抄后跑不出这个数，是你抄漏了或环境不同 —— 先核这一条。
+
 ---
 
 ## 文件结构
@@ -114,13 +118,13 @@ class _Arm:
 #: 固件 7J 出厂软限位 —— 从 `litearm-stm32` `params/joint_limit_macros.h` 抄来。
 #: ⚠ J4 的上端只有 +0.017547 rad（1°），是本文件里最窄的一根行程。
 FW_LIMITS = [
-    (-3.071547, 3.071547),   # J1
-    (-2.967060, 2.967060),   # J2
-    (-2.967060, 2.967060),   # J3
-    (-3.071547, 0.017547),   # J4  <- 上端 1°
-    (-2.967060, 2.967060),   # J5
-    (-2.096460, 2.096460),   # J6
-    (-2.967060, 2.967060),   # J7
+    (-2.809547, 2.809547),   # J1
+    (-1.727547, 1.727547),   # J2
+    (-2.809547, 2.809547),   # J3
+    (-3.071547, 0.017547),   # J4  <- 上端 1°，本表最窄
+    (-2.809547, 2.809547),   # J5
+    (-1.553547, 1.553547),   # J6
+    (-1.553547, 1.553547),   # J7
 ]
 
 
@@ -213,8 +217,10 @@ def test_slew_is_rate_limited():
     sp, ac, dt = [1.0], [10.0], 0.01
     q_cmd, dq_cmd = [0.0], [0.0]
     q_cmd, dq_cmd = slew_target([1.0], q_cmd, dq_cmd, sp, ac, dt)
-    assert q_cmd[0] == pytest.approx(0.01, abs=1e-9)
-    assert dq_cmd[0] == pytest.approx(1.0, abs=1e-9)
+    # dv_max = accel_limit * dt = 10.0 * 0.01 = 0.1 ⇒ 本拍速度只到 0.1，
+    # 位置只推进 0.1 * 0.01 = 0.001。⚠ 别把这拍当成"一步到 v_limit"。
+    assert q_cmd[0] == pytest.approx(0.001, abs=1e-12)
+    assert dq_cmd[0] == pytest.approx(0.1, abs=1e-12)
 
 
 def test_slew_never_exceeds_speed_limit():
@@ -464,7 +470,7 @@ def slew_target(raw_target, q_cmd, dq_cmd, speed_limit, accel_limit, dt):
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `/usr/bin/python3 -m pytest tests/test_safety.py -q`
-Expected: PASS（17 条）
+Expected: PASS（15 条）
 
 - [ ] **Step 5: 提交**
 
@@ -503,7 +509,6 @@ def _load_reference_slew():
     这样参照物是**原版的源码本身**，不是我抄的诗。
     """
     import ast
-    import textwrap
 
     with open(PYLITEARM_SLEW) as f:
         tree = ast.parse(f.read())
@@ -540,12 +545,16 @@ def test_slew_matches_pylitearm_reference(targets):
 
 
 def test_reference_slew_is_actually_loaded():
-    """判别力：证明上一条不是"两个空函数互相对拍"。"""
+    """判别力：证明上一条不是"两个空函数互相对拍"。
+
+    ⚠ 原版的循环上界是模块常量 `N = 7`（`pylitearm/hal/hardware.py`），
+    传 1 元素列表会 `IndexError` —— 所以这里必须给 7 个。
+    """
     ref = _load_reference_slew()
-    q, dq = [0.0], [0.0]
-    q, dq = ref([1.0], q, dq, [1.0], [10.0], 0.01)
+    q, dq = [0.0] * 7, [0.0] * 7
+    q, dq = ref([1.0] * 7, q, dq, [1.0] * 7, [10.0] * 7, 0.01)
     assert q[0] > 0.0
-    assert dq[0] == pytest.approx(1.0)
+    assert dq[0] == pytest.approx(0.1)     # 同上：本拍只到 dv_max = 10 * 0.01
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -706,27 +715,19 @@ class FakeJointParam:
     q_max: float
 
 
-class FakeSerial:
-    """`arm._tr` 的最低限度替身 —— 只为了让 `close()` 有东西可关。"""
-
-    def __init__(self):
-        self.port = "/dev/fake"
-        self.closed = False
-
-
 class FakeArm:
     """`litearm.Arm` 的 stand-in。**形状对齐真 SDK**（见模块 docstring）。"""
 
     #: 固件 7J 出厂软限位 —— 抄自 `litearm-stm32` `params/joint_limit_macros.h`。
     #: ⚠ J4 的上端只有 0.017547（1°），是本表最窄的一根。
     LIMITS = [
-        (-3.071547, 3.071547),
-        (-2.967060, 2.967060),
-        (-2.967060, 2.967060),
+        (-2.809547, 2.809547),
+        (-1.727547, 1.727547),
+        (-2.809547, 2.809547),
         (-3.071547, 0.017547),
-        (-2.967060, 2.967060),
-        (-2.096460, 2.096460),
-        (-2.967060, 2.967060),
+        (-2.809547, 2.809547),
+        (-1.553547, 1.553547),
+        (-1.553547, 1.553547),
     ]
 
     def __init__(self, port: Optional[str] = None, **kwargs):
@@ -835,30 +836,27 @@ def fake_arm():
 
 
 @pytest.fixture
-def make_robot(monkeypatch, fake_arm):
-    """造一个 `litearm.Arm` 已被 FakeArm 顶掉的 LiteArmRobot。"""
+def make_robot(monkeypatch):
+    """造一个 `litearm.Arm` 已被 FakeArm 顶掉的 LiteArmRobot。
+
+    ⚠ 工厂**必须把构造关键字记到臂上** —— 否则 `Arm(port=..., move_timeout=...)`
+    传进去的东西在假臂上无迹可寻，测试只能断言"connect 被调了"，断言不了"连的是
+    哪个口、超时是多少"。
+    """
 
     def _make(**cfg):
-        monkeypatch.setattr(litearm, "Arm", lambda *a, **kw: fake_arm)
+        arm = FakeArm()
+
+        def _factory(*args, **kwargs):
+            arm.ctor_kwargs = dict(kwargs)
+            arm.port = kwargs.get("port")
+            return arm
+
+        monkeypatch.setattr(litearm, "Arm", _factory)
         robot = LiteArmRobot(LiteArmRobotConfig(**cfg))
-        return robot, fake_arm
+        return robot, arm
 
     return _make
-
-
-@pytest.fixture
-def wait_until():
-    """轮询等待，超时即断言失败（避免测试里散落 sleep 常量）。"""
-
-    def _wait(predicate, timeout: float = 2.0, interval: float = 0.01):
-        deadline = __import__("time").monotonic() + timeout
-        while __import__("time").monotonic() < deadline:
-            if predicate():
-                return True
-            __import__("time").sleep(interval)
-        return predicate()
-
-    return _wait
 ```
 
 - [ ] **Step 4: 跑测试确认通过**
@@ -878,179 +876,7 @@ git commit -m "test: reshape FakeArm after the real direct-CDC SDK"
 
 ---
 
-## Task 4: `config.py` 重写
-
-**Files:**
-
-- Rewrite: `src/litearm_lerobot/config.py`
-- Test: `tests/test_config.py`
-
-- [ ] **Step 1: 写失败测试**
-
-创建 `tests/test_config.py`：
-
-```python
-"""配置契约 —— 字段名与默认值都是对外契约，改名即破坏消费者。"""
-from __future__ import annotations
-
-import pytest
-
-from litearm_lerobot import LiteArmRobotConfig
-from litearm_lerobot.servo import (
-    DEFAULT_ACCEL_LIMIT,
-    DEFAULT_K_D,
-    DEFAULT_K_P,
-    DEFAULT_SPEED_LIMIT,
-)
-
-
-def test_registered_under_litearm():
-    assert LiteArmRobotConfig().type == "litearm"
-
-
-def test_old_server_fields_are_gone():
-    """六个字段消失或改名 —— 见 spec §11.1，PR 里要明说破坏消费者。"""
-    cfg = LiteArmRobotConfig()
-    for gone in ("endpoint", "arm_id", "use_commander", "movej_speed", "settle_s",
-                 "query_timeout"):
-        assert not hasattr(cfg, gone), f"{gone} 是旧 server 语义的字段"
-
-
-def test_new_defaults():
-    cfg = LiteArmRobotConfig()
-    assert cfg.port is None              # None = find_cdc_port() 自动找
-    assert cfg.move_timeout == 15.0
-    assert cfg.num_joints == 7
-    assert cfg.servo_hz == 250.0
-    assert cfg.actuator == "joint_follow"
-    assert cfg.enable_on_connect is True
-    assert cfg.disable_on_disconnect is False
-    assert cfg.limit_margin == 0.01      # ⚠ 不是 0.02（会毁掉 J4 正半轴）
-    assert cfg.engage_sec == 0.3
-
-
-def test_servo_table_defaults_come_from_servo_module():
-    cfg = LiteArmRobotConfig()
-    assert cfg.k_p is None and cfg.k_d is None
-    assert cfg.speed_limit is None and cfg.accel_limit is None
-    assert DEFAULT_K_P == [200.0, 200.0, 200.0, 200.0, 80.0, 80.0, 80.0]
-    assert DEFAULT_K_D == [3.0, 5.0, 3.0, 3.0, 1.5, 1.5, 1.5]
-    assert DEFAULT_SPEED_LIMIT == [2.0, 2.0, 1.75, 1.75, 2.0, 2.0, 2.0]
-    assert DEFAULT_ACCEL_LIMIT == [8.0, 8.0, 7.0, 7.0, 9.0, 9.0, 9.0]
-
-
-def test_actuator_only_accepts_known_names():
-    with pytest.raises(ValueError):
-        LiteArmRobotConfig(actuator="nope").validate()
-```
-
-- [ ] **Step 2: 跑测试确认失败**
-
-Run: `/usr/bin/python3 -m pytest tests/test_config.py -q`
-Expected: FAIL —— `litearm_lerobot.servo` 还不存在 / 旧字段还在
-
-- [ ] **Step 3: 写实现**
-
-创建 `src/litearm_lerobot/config.py`（先建 `servo.py` 的常量部分，见 Task 5 Step 3
-的第一个代码块；若想按顺序做，可把 Task 5 的常量块先落到 `servo.py`）：
-
-```python
-"""LeRobot config for the LiteArm robotic arm (litearm-python direct CDC)."""
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-from typing import List, Optional
-
-from lerobot.robots.config import RobotConfig
-
-from .servo import (
-    ACTUATORS,
-    DEFAULT_ACCEL_LIMIT,
-    DEFAULT_K_D,
-    DEFAULT_K_P,
-    DEFAULT_SPEED_LIMIT,
-)
-
-
-@RobotConfig.register_subclass("litearm")
-@dataclass(kw_only=True)
-class LiteArmRobotConfig(RobotConfig):
-    # -- 连接 -----------------------------------------------------------------
-    #: CDC 端口。`None` = `litearm.find_cdc_port()` 按 VID:PID 1d50:606f 自动找。
-    #: ⚠ 别写死 `/dev/ttyACM0` —— 两个 ACM 口的编号会互换。
-    port: Optional[str] = None
-    #: 单次阻塞运动的超时（秒）。`movej` 到位即提前返回，这只是上限。
-    move_timeout: float = 15.0
-
-    # -- 运动 ----------------------------------------------------------------
-    #: 关节数。连接后与 `arm.n` 对账，不符即抛（1J 台架板的 n 是 1）。
-    num_joints: int = 7
-    #: 伺服环节拍（Hz）。它直接进 `slew_target` 的 `dt`，**必须接近真实周期**。
-    servo_hz: float = 250.0
-    #: 执行器。`joint_follow`（默认）或 `move_js`，见 spec §5.4。
-    actuator: str = "joint_follow"
-    #: 伺服增益。`None` ⇒ 用 servo 模块的默认表。
-    #: ⚠ 只在 `actuator="joint_follow"` 时有效 —— `move_js` 没有随帧增益通道，
-    #:   传了会被忽略（连接时会告警，不静默）。
-    k_p: Optional[List[float]] = None
-    k_d: Optional[List[float]] = None
-    #: 速度/加速度上限。`None` ⇒ 用 servo 模块的**通用档**（保守）。
-    #: ⚠ 放开到固件 `s_jf_vel_max` 那张表就是同构遥操仓的配置，那时响应最快。
-    speed_limit: Optional[List[float]] = None
-    accel_limit: Optional[List[float]] = None
-    #: 接管托举时长（秒）。照 litearm-server 的 `engage_sec`。
-    engage_sec: float = 0.3
-
-    # -- 安全 ----------------------------------------------------------------
-    #: 软限位内缩量（rad）。⚠⚠ **不能调大**：J4 的固件上端只有 +0.017547，
-    #: 取 0.02 就把 J4 正半轴抹掉（且不报错）。见 safety.DEFAULT_LIMIT_MARGIN。
-    limit_margin: float = 0.01
-    #: 连接时使能电机。直连下 enable 失败 = 臂不会动 ⇒ 抛（不再吞异常）。
-    enable_on_connect: bool = True
-    #: 收尾时失能。`False`（默认）⇒ `movej` 回当前实测位姿，交回固件持位。
-    #: ⚠ 设 `True` 会让臂在自重下落 —— 只有在臂已落在支撑面上时才这么设。
-    disable_on_disconnect: bool = False
-
-    def validate(self) -> None:
-        """把不合法的配置挡在连接之前。"""
-        if self.actuator not in ACTUATORS:
-            raise ValueError(
-                f"actuator 只能是 {sorted(ACTUATORS)}，收到 {self.actuator!r}"
-            )
-        if self.num_joints <= 0:
-            raise ValueError(f"num_joints 必须为正，收到 {self.num_joints}")
-        if self.servo_hz <= 0.0:
-            raise ValueError(f"servo_hz 必须为正，收到 {self.servo_hz}")
-        if self.limit_margin < 0.0:
-            raise ValueError(f"limit_margin 不能为负，收到 {self.limit_margin}")
-        for name in ("k_p", "k_d", "speed_limit", "accel_limit"):
-            vals = getattr(self, name)
-            if vals is not None and len(vals) != self.num_joints:
-                raise ValueError(
-                    f"{name} 需要 {self.num_joints} 个值，收到 {len(vals)}"
-                )
-        if self.actuator == "move_js" and (self.k_p is not None or self.k_d is not None):
-            # ⚠ move_js 没有随帧增益通道。这里**不抛**（抛会让一个本来能跑的
-            #   配置起不来），但必须让调用方知道自己的值被忽略了 —— 由 robot.py
-            #   在 connect() 时 log.warning（见 Task 6）。
-            pass
-```
-
-- [ ] **Step 4: 跑测试确认通过**
-
-Run: `/usr/bin/python3 -m pytest tests/test_config.py -q`
-Expected: PASS（5 条）
-
-- [ ] **Step 5: 提交**
-
-```bash
-git add src/litearm_lerobot/config.py src/litearm_lerobot/servo.py tests/test_config.py
-git commit -m "feat: rewrite the config for the direct-CDC backend"
-```
-
----
-
-## Task 5: `servo.py` —— 伺服环与下发点
+## Task 4: `servo.py` —— 伺服环与下发点
 
 **Files:**
 
@@ -1100,10 +926,11 @@ def _wait(predicate, timeout=2.0, interval=0.005):
 # ── prime / engage ─────────────────────────────────────────────────────────
 
 def test_prime_happens_before_any_target(fake_arm):
+    """不喂目标也必须先 prime —— 固件不支持 0x08 时要在这一步就响。"""
     loop = _loop(fake_arm)
     loop.start()
     try:
-        assert fake_arm.calls_named("joint_follow"), "prime 没发"
+        assert _wait(lambda: bool(fake_arm.calls_named("joint_follow"))), "prime 没发"
     finally:
         loop.stop()
 
@@ -1128,7 +955,9 @@ def test_engage_holds_at_current_pose_with_soft_gains(fake_arm):
     finally:
         loop.stop()
     kps = [c[3][0] for c in fake_arm.calls_named("joint_follow")]
-    assert kps[0] == pytest.approx(15.0), "prime 之后第一拍应是 engage 增益"
+    # ⚠ 第 0 拍是 **prime**（用跟随增益托住），engage 从第 1 拍起。
+    assert kps[0] == pytest.approx(DEFAULT_K_P[0]), "prime 应使用跟随增益"
+    assert kps[1] == pytest.approx(15.0), "engage 应从第 1 拍起用低刚度"
 
 
 # ── 目标跟踪 ───────────────────────────────────────────────────────────────
@@ -1179,6 +1008,28 @@ def test_tick_rate_is_close_to_the_configured_hz(fake_arm):
         loop.stop()
     # 0.5 s @100 Hz ≈ 50 拍；放宽到 0.5× 以容忍 CI 抖动，但足以挡住"没跑"
     assert n > 25, f"0.5 s 只发了 {n} 拍 —— 节拍没跑起来"
+
+
+def test_one_send_per_tick(fake_arm):
+    """spec §9.5-2：每拍**恰好**一次下发（往返数 == 拍数，允许 1 拍）。
+
+    ⚠ 与上一条互补：一个每拍发两次的循环能通过"节拍不低于下限"，但过不了这里。
+    """
+    loop = _loop(fake_arm, hz=100.0)
+    loop.start()
+    try:
+        loop.set_target([0.3] * 7)
+        n0 = len(fake_arm.calls_named("joint_follow"))
+        t0 = time.monotonic()
+        time.sleep(0.5)
+        elapsed = time.monotonic() - t0
+        n1 = len(fake_arm.calls_named("joint_follow"))
+    finally:
+        loop.stop()
+    expected = elapsed * 100.0
+    assert n1 - n0 == pytest.approx(expected, abs=2.0), (
+        f"{elapsed:.3f} s 内发了 {n1 - n0} 拍，期望约 {expected:.0f} 拍"
+    )
 
 
 def test_before_first_target_it_holds_the_measured_pose(fake_arm):
@@ -1303,7 +1154,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Callable, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 from .safety import Limits, slew_target
 
@@ -1500,14 +1351,18 @@ class ServoLoop:
         try:
             self._serve()
         except BaseException as exc:          # noqa: BLE001 —— 要存下来给调用方
-            self.error = exc
             log.error("伺服线程退出：%s", exc, exc_info=True)
+            # ⚠⚠ 顺序是 **先接管、后记错**（spec §7.5）：`error` 一置，调用方就会
+            #   在下一个 `send_action` 上抛 —— 那意味着"这条臂已经没人管了"这句
+            #   话必须**在接管做过之后**才成立。反过来写会让调用方在臂还没被接管
+            #   时就收到死讯，也会让"等 error 再断言 movej"的判据变成竞态。
             try:
                 hold_at_current(self._arm)
                 log.warning("已受控接管（movej 回当前实测位姿）")
             except Exception:                 # noqa: BLE001
                 log.exception(
                     "受控接管也失败了 —— 臂会在 0.1 s 后进入 fail-soft（下垂）")
+            self.error = exc
 
     def _serve(self) -> None:
         kp, kd = self._k_p, self._k_d
@@ -1594,8 +1449,8 @@ class ServoLoop:
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `/usr/bin/python3 -m pytest tests/test_servo.py tests/test_config.py -q`
-Expected: PASS
+Run: `/usr/bin/python3 -m pytest tests/test_servo.py -q`
+Expected: PASS（15 条）
 
 > 若 `test_tick_rate_is_close_to_the_configured_hz` 在 CI 上偶发失败，把阈值从
 > `n > 25` 放宽到 `n > 15`，**不要删这条** —— 它是"判据的判据"。
@@ -1605,6 +1460,177 @@ Expected: PASS
 ```bash
 git add src/litearm_lerobot/servo.py tests/test_servo.py
 git commit -m "feat: add the servo loop driving arm.joint_follow"
+```
+
+---
+
+## Task 5: `config.py` 重写
+
+**Files:**
+
+- Rewrite: `src/litearm_lerobot/config.py`
+- Test: `tests/test_config.py`
+
+- [ ] **Step 1: 写失败测试**
+
+创建 `tests/test_config.py`：
+
+```python
+"""配置契约 —— 字段名与默认值都是对外契约，改名即破坏消费者。"""
+from __future__ import annotations
+
+import pytest
+
+from litearm_lerobot import LiteArmRobotConfig
+from litearm_lerobot.servo import (
+    DEFAULT_ACCEL_LIMIT,
+    DEFAULT_K_D,
+    DEFAULT_K_P,
+    DEFAULT_SPEED_LIMIT,
+)
+
+
+def test_registered_under_litearm():
+    assert LiteArmRobotConfig().type == "litearm"
+
+
+def test_old_server_fields_are_gone():
+    """六个字段消失或改名 —— 见 spec §11.1，PR 里要明说破坏消费者。"""
+    cfg = LiteArmRobotConfig()
+    for gone in ("endpoint", "arm_id", "use_commander", "movej_speed", "settle_s",
+                 "query_timeout"):
+        assert not hasattr(cfg, gone), f"{gone} 是旧 server 语义的字段"
+
+
+def test_new_defaults():
+    cfg = LiteArmRobotConfig()
+    assert cfg.port is None              # None = find_cdc_port() 自动找
+    assert cfg.move_timeout == 15.0
+    assert cfg.num_joints == 7
+    assert cfg.servo_hz == 250.0
+    assert cfg.actuator == "joint_follow"
+    assert cfg.enable_on_connect is True
+    assert cfg.disable_on_disconnect is False
+    assert cfg.limit_margin == 0.01      # ⚠ 不是 0.02（会毁掉 J4 正半轴）
+    assert cfg.engage_sec == 0.3
+
+
+def test_servo_table_defaults_come_from_servo_module():
+    cfg = LiteArmRobotConfig()
+    assert cfg.k_p is None and cfg.k_d is None
+    assert cfg.speed_limit is None and cfg.accel_limit is None
+    assert DEFAULT_K_P == [200.0, 200.0, 200.0, 200.0, 80.0, 80.0, 80.0]
+    assert DEFAULT_K_D == [3.0, 5.0, 3.0, 3.0, 1.5, 1.5, 1.5]
+    assert DEFAULT_SPEED_LIMIT == [2.0, 2.0, 1.75, 1.75, 2.0, 2.0, 2.0]
+    assert DEFAULT_ACCEL_LIMIT == [8.0, 8.0, 7.0, 7.0, 9.0, 9.0, 9.0]
+
+
+def test_actuator_only_accepts_known_names():
+    with pytest.raises(ValueError):
+        LiteArmRobotConfig(actuator="nope").validate()
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `/usr/bin/python3 -m pytest tests/test_config.py -q`
+Expected: FAIL —— `litearm_lerobot.servo` 还不存在 / 旧字段还在
+
+- [ ] **Step 3: 写实现**
+
+创建 `src/litearm_lerobot/config.py`：
+
+```python
+"""LeRobot config for the LiteArm robotic arm (litearm-python direct CDC)."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+from lerobot.robots.config import RobotConfig
+
+from .servo import (
+    ACTUATORS,
+    DEFAULT_ACCEL_LIMIT,
+    DEFAULT_K_D,
+    DEFAULT_K_P,
+    DEFAULT_SPEED_LIMIT,
+)
+
+
+@RobotConfig.register_subclass("litearm")
+@dataclass(kw_only=True)
+class LiteArmRobotConfig(RobotConfig):
+    # -- 连接 -----------------------------------------------------------------
+    #: CDC 端口。`None` = `litearm.find_cdc_port()` 按 VID:PID 1d50:606f 自动找。
+    #: ⚠ 别写死 `/dev/ttyACM0` —— 两个 ACM 口的编号会互换。
+    port: Optional[str] = None
+    #: 单次阻塞运动的超时（秒）。`movej` 到位即提前返回，这只是上限。
+    move_timeout: float = 15.0
+
+    # -- 运动 ----------------------------------------------------------------
+    #: 关节数。连接后与 `arm.n` 对账，不符即抛（1J 台架板的 n 是 1）。
+    num_joints: int = 7
+    #: 伺服环节拍（Hz）。它直接进 `slew_target` 的 `dt`，**必须接近真实周期**。
+    servo_hz: float = 250.0
+    #: 执行器。`joint_follow`（默认）或 `move_js`，见 spec §5.4。
+    actuator: str = "joint_follow"
+    #: 伺服增益。`None` ⇒ 用 servo 模块的默认表。
+    #: ⚠ 只在 `actuator="joint_follow"` 时有效 —— `move_js` 没有随帧增益通道，
+    #:   传了会被忽略（连接时会告警，不静默）。
+    k_p: Optional[List[float]] = None
+    k_d: Optional[List[float]] = None
+    #: 速度/加速度上限。`None` ⇒ 用 servo 模块的**通用档**（保守）。
+    #: ⚠ 放开到固件 `s_jf_vel_max` 那张表就是同构遥操仓的配置，那时响应最快。
+    speed_limit: Optional[List[float]] = None
+    accel_limit: Optional[List[float]] = None
+    #: 接管托举时长（秒）。照 litearm-server 的 `engage_sec`。
+    engage_sec: float = 0.3
+
+    # -- 安全 ----------------------------------------------------------------
+    #: 软限位内缩量（rad）。⚠⚠ **不能调大**：J4 的固件上端只有 +0.017547，
+    #: 取 0.02 就把 J4 正半轴抹掉（且不报错）。见 safety.DEFAULT_LIMIT_MARGIN。
+    limit_margin: float = 0.01
+    #: 连接时使能电机。直连下 enable 失败 = 臂不会动 ⇒ 抛（不再吞异常）。
+    enable_on_connect: bool = True
+    #: 收尾时失能。`False`（默认）⇒ `movej` 回当前实测位姿，交回固件持位。
+    #: ⚠ 设 `True` 会让臂在自重下落 —— 只有在臂已落在支撑面上时才这么设。
+    disable_on_disconnect: bool = False
+
+    def validate(self) -> None:
+        """把不合法的配置挡在连接之前。"""
+        if self.actuator not in ACTUATORS:
+            raise ValueError(
+                f"actuator 只能是 {sorted(ACTUATORS)}，收到 {self.actuator!r}"
+            )
+        if self.num_joints <= 0:
+            raise ValueError(f"num_joints 必须为正，收到 {self.num_joints}")
+        if self.servo_hz <= 0.0:
+            raise ValueError(f"servo_hz 必须为正，收到 {self.servo_hz}")
+        if self.limit_margin < 0.0:
+            raise ValueError(f"limit_margin 不能为负，收到 {self.limit_margin}")
+        for name in ("k_p", "k_d", "speed_limit", "accel_limit"):
+            vals = getattr(self, name)
+            if vals is not None and len(vals) != self.num_joints:
+                raise ValueError(
+                    f"{name} 需要 {self.num_joints} 个值，收到 {len(vals)}"
+                )
+        if self.actuator == "move_js" and (self.k_p is not None or self.k_d is not None):
+            # ⚠ move_js 没有随帧增益通道。这里**不抛**（抛会让一个本来能跑的
+            #   配置起不来），但必须让调用方知道自己的值被忽略了 —— 由 robot.py
+            #   在 connect() 时 log.warning（见 Task 6）。
+            pass
+```
+
+- [ ] **Step 4: 跑测试确认通过**
+
+Run: `/usr/bin/python3 -m pytest tests/test_config.py -q`
+Expected: PASS（5 条）
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/litearm_lerobot/config.py tests/test_config.py
+git commit -m "feat: rewrite the config for the direct-CDC backend"
 ```
 
 ---
@@ -1673,7 +1699,8 @@ def test_connect_passes_port_and_move_timeout(make_robot):
     try:
         assert arm.connected
         assert arm.port == "/dev/ttyACM9"
-        assert arm.ctor_kwargs == {"move_timeout": 7.5}
+        # 逐个断言我们**实际传**的两个关键字（多一个少一个都算契约变了）
+        assert arm.ctor_kwargs == {"port": "/dev/ttyACM9", "move_timeout": 7.5}
         assert arm.calls_named("enable"), "enable_on_connect 默认 True"
         assert robot.is_connected
     finally:
@@ -1773,13 +1800,14 @@ def test_send_action_warns_on_saturation(make_robot, caplog):
 
 
 def test_send_action_reaches_the_servo(make_robot):
+    """断言对着 `send_action` 的**返回值**（即钳位后的实际目标）——
+    对着原始输入断言会在 J4 上必挂：J4 上端只有 0.0175，任何大目标都被钳。"""
     robot, arm = make_robot()
     robot.connect()
     try:
-        target = [0.2] * 7
-        robot.send_action({"action": target})
+        sent = robot.send_action({"action": [0.2] * 7})["action"]
         assert _wait(lambda: any(
-            max(abs(a - b) for a, b in zip(c[1], target)) < 1e-3
+            max(abs(a - b) for a, b in zip(c[1], sent)) < 1e-3
             for c in arm.calls_named("joint_follow")
         )), "目标没到伺服环"
     finally:
@@ -2017,8 +2045,10 @@ class LiteArmRobot(Robot):
         一切正常。`ServoLoop.error` 是那个不变量的具名载体。
         """
         if self._servo is not None and self._servo.error is not None:
+            # ⚠ 把死因**写进消息**，不只是 `from` —— 调用方（以及 pytest 的
+            #   `match=`）只看得到这一层，链式异常看不见。
             raise RuntimeError(
-                f"伺服环已停（{self._servo.actuator} 下发失败）"
+                f"伺服环已停（{self._servo.actuator} 下发失败）：{self._servo.error}"
             ) from self._servo.error
 
     def get_observation(self) -> Dict[str, Any]:
@@ -2085,7 +2115,7 @@ class LiteArmRobot(Robot):
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `/usr/bin/python3 -m pytest tests/test_robot.py -q`
-Expected: PASS（18 条）
+Expected: PASS（20 条）
 
 - [ ] **Step 5: 提交**
 
@@ -2222,7 +2252,7 @@ def test_needed_exceptions_are_exported():
 - [ ] **Step 2: 跑测试确认通过**
 
 Run: `/usr/bin/python3 -m pytest tests/test_sdk_contract.py -q`
-Expected: PASS
+Expected: PASS（17 条）
 
 > **若这里 FAIL** —— 说明本仓对 SDK 的假设有错，**先改实现，不要改这些判据**。
 > 这正是这个文件存在的意义。
@@ -2325,7 +2355,7 @@ def test_register_returns_litearm_robot(monkeypatch):
 - [ ] **Step 3: 跑全量测试**
 
 Run: `/usr/bin/python3 -m pytest -q`
-Expected: PASS（全绿，数量约 60+）
+Expected: PASS（全绿，87 条 —— 实测值，见本节末尾）
 
 - [ ] **Step 4: 提交**
 
@@ -2688,7 +2718,50 @@ git commit -m "build: use the release placeholder version and require SDK 2.1"
 - [ ] **Step 1: 全量测试**
 
 Run: `/usr/bin/python3 -m pytest -q`
-Expected: 全绿。把**逐字的输出**记下来（含条数）。
+Expected: 全绿 **87 passed**。把**逐字的输出**记下来。
+
+> **复现"计划代码已跑过"这个说法**：把本计划的代码块逐字抽出来独立跑一遍，
+> 与"按计划实现"是两条独立路径 —— 前者证明计划本身可执行，后者证明实现落了地。
+> 抽取脚本（把 `创建/追加/替换为 \`path\`` 后面的 ```python 块写到 `path`）：
+
+```bash
+/usr/bin/python3 - "$PWD/docs/superpowers/plans/2026-09-29-direct-cdc-backend.md" <<'EXTRACT'
+import io, os, re, shutil, sys
+plan, root = sys.argv[1], "/tmp/plancheck"
+lines = io.open(plan, encoding="utf-8").read().split("\n")
+shutil.rmtree(root, ignore_errors=True)
+os.makedirs(f"{root}/src/litearm_lerobot", exist_ok=True)
+os.makedirs(f"{root}/tests", exist_ok=True)
+A = re.compile(r"(创建|追加|整个替换为|替换为)[^\n]*?`((?:src|tests)/[^`]+\.py)`")
+B = re.compile(r"`((?:src|tests)/[^`]+\.py)`[^\n]*?(整个替换为|追加)")
+last, written = None, []
+for ln in lines:
+    m = A.search(ln) or B.search(ln)
+    if m:
+        last = m.group(2) if m.re is A else m.group(1)
+    if last and ln.strip() == "```python":
+        j = i = lines.index(ln); j += 1; buf = []
+        while lines[j].strip() != "```":
+            buf.append(lines[j]); j += 1
+        lines[i] = ""
+        dest = os.path.join(root, last)
+        mode = "a" if last in written else "w"
+        with io.open(dest, mode, encoding="utf-8") as f:
+            if mode == "a":
+                f.write("\n\n")
+            f.write("\n".join(buf) + "\n")
+        written.append(last); lines[j] = ""; last = None
+EXTRACT
+# ⚠ 两个已知的抽取盲区，需要手补（脚本只认"创建/追加/替换为 + 反引号路径"）：
+#   · tests/test_sdk_contract.py（该块无"创建 `path`"前缀）
+#   · tests/test_safety.py 的两段"在 `...` 末尾追加："（语序不同）
+#   · src/litearm_lerobot/utils.py 与 tests/test_utils.py 的另两条用例（计划说"不动"）
+# 补齐后：
+cp /home/llx/litearm-lerobot/src/litearm_lerobot/utils.py /tmp/plancheck/src/litearm_lerobot/
+cd /tmp/plancheck && PYTHONPATH=/tmp/plancheck/src /usr/bin/python3 -m pytest -q
+```
+
+Expected: `87 passed`。
 
 - [ ] **Step 2: 确认没有残留的旧 API 引用**
 
