@@ -1,7 +1,8 @@
 # Examples
 
-Each example is a plain script you run from the repository root with the package
-installed (see [../README.md](../README.md)).
+Runnable examples for engineers bringing the arm up for the first time or
+verifying a driver change. Each example is a plain script you run from the
+repository root with the package installed (see [../README.md](../README.md)).
 
 > **Warning:** examples 02 and 03 **drive the real arm**. Start with low speeds and keep
 > your hand near the emergency stop.
