@@ -2728,6 +2728,11 @@ git commit -m "docs: rewrite the guides for the direct-CDC backend"
 > 那是它自己的偏离，不是本仓的范例）。
 > ⚠ `__init__.py` 里的 `__version__ = "0.1.0"` **保留**：它是包自述，不是清单的
 > version 字段。若要严格对齐，改成读 `importlib.metadata` —— 本次不做（YAGNI）。
+> ⚠⚠ **本决定已于 2026-10-06 推翻**：该字面量已**删除**，而且上面提到的
+> `importlib.metadata` 那条退路也**被实测否决** —— 本机
+> `version("litearm-lerobot")` 返回 `0.1.0`，来源是一个 2026-08-26 的陈旧
+> egg-info（未被 git 跟踪），不是 `pyproject.toml` 的 `0.0.0+semantic-release`。
+> 判据见 `tests/test_source_hygiene.py`。
 
 - [ ] **Step 2: 核对 `ci.yml`**
 

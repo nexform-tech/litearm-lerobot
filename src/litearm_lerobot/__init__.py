@@ -18,9 +18,14 @@ Usage::
 hands it to a background servo loop. Run the whole session inside ``with`` so
 ``disconnect()`` always runs — without it the link is reclaimed only at garbage
 collection, and the arm's pose is not handed back at all.
-"""
 
-__version__ = "0.1.0"
+This package deliberately defines no ``__version__``. The git tag is the only
+source of truth for the version (``AGENTS.md`` §3); a literal here would be a
+second copy that ``semantic-release`` never rewrites, so it could only drift.
+For the installed distribution's version use
+``importlib.metadata.version("litearm-lerobot")``; for the code you actually
+have, use the git commit.
+"""
 
 from .config import LiteArmRobotConfig
 from .robot import LiteArmRobot
@@ -30,5 +35,4 @@ __all__ = [
     "LiteArmRobot",
     "LiteArmRobotConfig",
     "register",
-    "__version__",
 ]
