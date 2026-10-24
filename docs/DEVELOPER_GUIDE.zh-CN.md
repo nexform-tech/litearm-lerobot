@@ -137,30 +137,15 @@ python -m pytest tests/ -q
 
 ## 4. 数据集录制
 
-`LeRobotDataset` 要求**完整 feature 描述**（不是 `robot.observation_features`
-返回的简写）：
+本仓库当前尚未提供策略训练录制器。录制器必须从主臂、遥操作器、规划器或策略取得
+requested action，通过 `send_action()` 下发，并把其返回的 accepted action 存入
+`action`。从机实测关节状态应独立存入 `observation.state`。
 
-```python
-features = {
-    "observation.state": {"dtype": "float32", "shape": (7,)},
-    "action":            {"dtype": "float32", "shape": (7,)},
-}
-```
+**不要**从 `observation.state` 推导 `action`。这会生成没有示教信号的恒等映射数据。
 
-`LeRobotDataset.create(repo_id, fps, root, ...)` 会把数据集直接存在
-`<root>`，且**拒绝覆盖**已存在的目录——请换新的 `repo_id` 或删目录
-重录。每一帧必须含 `"task"` 键且为 numpy float32 数组：
-
-```python
-dataset.add_frame({
-    "observation.state": np.asarray(obs["observation.state"], dtype=np.float32),
-    "action": np.asarray(action, dtype=np.float32),
-    "task": "push",
-})
-```
-
-完整循环为 `create_episode_buffer()` → `add_frame(...)` × N →
-`save_episode()`。见 [examples/03_record_dataset.py](../examples/03_record_dataset.py)。
+[examples/03_record_dataset.py](../examples/03_record_dataset.py) 是状态回放诊断脚本。
+它在没有显式确认时 fail-closed，且永远不声明 `action` feature。输出只能验证驱动与
+数据路径，不是策略训练证据。
 
 ## 5. LeRobot CLI 集成（可选）
 

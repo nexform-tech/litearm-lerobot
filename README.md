@@ -4,9 +4,9 @@
 adapter for the **LiteArm** robotic arm, for engineers who record datasets or run
 policies on the arm.
 
-Use the LiteArm with LeRobot's standard `Robot` interface: read observations, send
-actions, and record `LeRobotDataset` episodes for policy training — with no
-changes to LeRobot tooling.
+Use the LiteArm with LeRobot's standard `Robot` interface to read observations
+and send actions. Training-data collection requires a separate action source;
+the diagnostic recorder in this repository does not provide one.
 
 ```text
 LeRobot Robot API ──→ LiteArmRobot ──→ litearm.Arm ──→ USB CDC ──→ STM32 ──→ motors
@@ -26,7 +26,7 @@ LeRobot Robot API ──→ LiteArmRobot ──→ litearm.Arm ──→ USB CDC
 - [Configuration](#configuration)
 - [Motion and safety](#motion-and-safety)
 - [Observation / action loop](#observation--action-loop)
-- [Record a dataset](#record-a-dataset)
+- [Dataset recording safety](#dataset-recording-safety)
 - [LeRobot CLI integration](#lerobot-cli-integration)
 - [Examples](#examples)
 - [Troubleshooting](#troubleshooting)
@@ -195,52 +195,23 @@ error rather than return stale data.
 
 That loop is why a LeRobot policy loop never stalls. No call blocks on motion.
 
-## Record a dataset
+## Dataset recording safety
 
-`LeRobotDataset` requires **full feature specs**, not the shorthand returned by
-`observation_features`:
+This repository does not currently include a policy-training recorder. A valid
+training frame needs two independent sources:
 
-```python
-from pathlib import Path
-import numpy as np
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from litearm_lerobot import LiteArmRobot, LiteArmRobotConfig
+- `observation.state` is the follower arm's measured state.
+- `action` is the accepted command returned by `send_action()`, whose request
+  came from a leader, teleoperator, planner, or policy.
 
-robot = LiteArmRobot(LiteArmRobotConfig())
-robot.connect()
+**Do not** copy `observation.state` into `action`. That produces an identity
+dataset that teaches a policy to hold its current pose.
 
-features = {
-    "observation.state": {"dtype": "float32", "shape": (robot.config.num_joints,)},
-    "action": {"dtype": "float32", "shape": (robot.config.num_joints,)},
-}
-dataset = LeRobotDataset.create(
-    repo_id="litearm_demo", fps=30,
-    root=Path("data") / "litearm_demo",          # this directory must NOT exist
-    robot_type=robot.name, features=features, use_videos=False,
-)
-dataset.episode_buffer = dataset.create_episode_buffer()
-obs = robot.get_observation()
-dataset.add_frame({
-    "observation.state": np.asarray(obs["observation.state"], dtype=np.float32),
-    "action": np.asarray(obs["observation.state"], dtype=np.float32),
-    "task": "push",
-})
-dataset.save_episode()
-robot.disconnect()
-```
-
-Key points:
-
-- `LeRobotDataset.create(...)` stores the dataset directly at `<root>`
-  and **refuses to overwrite** an existing directory — pick a fresh `repo_id` or
-  delete the directory to re-record.
-- Every frame must contain a `"task"` key and numpy **float32** arrays for each
-  feature.
-- The full loop is `create_episode_buffer()` → `add_frame(...)` × N →
-  `save_episode()`.
-
-The ready-made recording script is
-[examples/03_record_dataset.py](examples/03_record_dataset.py).
+[examples/03_record_dataset.py](examples/03_record_dataset.py) is a driver and
+dataset-path diagnostic only. It refuses to run unless you pass
+`--allow-state-replay-demo`. Even with that opt-in, it writes the accepted
+target as `diagnostic.state_replay_target`, never as `action`, so the output is
+not a policy-training dataset.
 
 ## LeRobot CLI integration
 
@@ -263,7 +234,7 @@ After that, any config whose `type` is `litearm` resolves to
 |---|---|
 | [examples/01_read_observation.py](examples/01_read_observation.py) | Read-only: connect and print observations |
 | [examples/02_send_action.py](examples/02_send_action.py) | Drive a scripted sinusoidal trajectory (**motion** — keep the E-stop nearby) |
-| [examples/03_record_dataset.py](examples/03_record_dataset.py) | Record teleop episodes into a `LeRobotDataset` |
+| [examples/03_record_dataset.py](examples/03_record_dataset.py) | Record an explicitly opted-in, non-training state-replay diagnostic |
 
 Runnable commands (pass `--port` only when auto-detection picks the wrong device):
 
@@ -271,7 +242,9 @@ Runnable commands (pass `--port` only when auto-detection picks the wrong device
 python examples/01_read_observation.py --count 5
 python examples/02_send_action.py --duration 10 --amplitude 0.05
 python examples/03_record_dataset.py \
-  --repo-id litearm_demo --root data --episodes 1 --episode-length 50 --task push
+  --allow-state-replay-demo \
+  --repo-id litearm_state_replay_demo --root diagnostic_data \
+  --episodes 1 --episode-length 50 --task bench_check
 ```
 
 Examples 02 and 03 **drive the real arm**. Start with small `--amplitude` values,
@@ -296,7 +269,7 @@ first step. Each example's options are described in
 | `ValueError: action dict must contain an 'action' key` | `send_action` expects `{"action": [..]}`. |
 | `ValueError: 关节数不符：固件报 1，配置是 7` | The firmware reports a different joint count than `num_joints`. The 1J bench board reports `1`; a 7J arm reports `7`. |
 | `enable()` fails on connect | A direct link cannot be read-only, so this means the arm is not answering. Check the power and the CDC cable. |
-| Dataset already exists at `<root>` | `LeRobotDataset.create` refuses to overwrite. Pick a new `--repo-id` or delete the directory. |
+| Diagnostic dataset already exists at `<root>` | `LeRobotDataset.create` refuses to overwrite. Pick a new `--repo-id`; do not delete an existing recording from this workflow. |
 
 ## Package layout
 
