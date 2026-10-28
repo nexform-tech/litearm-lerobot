@@ -1,15 +1,19 @@
 # litearm-lerobot
 
-`litearm-lerobot` is a [LeRobot](https://github.com/huggingface/lerobot) `Robot`
-adapter for the **LiteArm** robotic arm, for engineers who record datasets or run
-policies on the arm.
+`litearm-lerobot` provides [LeRobot](https://github.com/huggingface/lerobot)
+`Robot` adapters for the **LiteArm** alone and for a **LiteArm + LiteGrip + one
+camera**, for engineers who record datasets or run policies.
 
-Use the LiteArm with LeRobot's standard `Robot` interface: read observations, send
-actions, and record `LeRobotDataset` episodes for policy training — with no
+Use the hardware with LeRobot's standard `Robot` interface: read observations,
+send actions, and record `LeRobotDataset` episodes for policy training — with no
 changes to LeRobot tooling.
 
 ```text
 LeRobot Robot API ──→ LiteArmRobot ──→ litearm.Arm ──→ USB CDC ──→ STM32 ──→ motors
+                   └→ LiteArmGripCameraRobot
+                        ├→ litearm-python → USB CDC → seven joints
+                        ├→ LiteGripController → SocketCAN → LiteGrip
+                        └→ LeRobot camera API → one camera
 ```
 
 > Full developer guide & API reference: [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md)
@@ -20,6 +24,7 @@ LeRobot Robot API ──→ LiteArmRobot ──→ litearm.Arm ──→ USB CDC
 ## Table of contents
 
 - [Overview & architecture](#overview--architecture)
+- [Combined adapter](#combined-adapter)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick start](#quick-start)
@@ -55,6 +60,34 @@ evaluation scripts — can drive a LiteArm unchanged.
 The LiteArm reports **absolute** joint positions from the arm controller, so
 `calibrate()` is a no-op and `is_calibrated` is always `True`.
 
+## Combined adapter
+
+`LiteArmGripCameraRobot` (registered as `litearm_grip_camera`) drives one
+LiteArm, one LiteGrip, and exactly one camera. It exposes the eight-dimensional
+contract that the training datasets store:
+
+| Concern | Implementation |
+|---|---|
+| Observation | `joint1.pos ... joint7.pos`, `gripper.pos`, one camera image |
+| Action | the same seven joints plus `gripper.pos` |
+| Gripper unit | calibrated opening angle in radians, 0 at the closed stop |
+| Gripper motion | `grasp` at or below the midpoint of the calibrated travel, `open` above it |
+| Camera | exactly one, reported under its configured feature name |
+
+This adapter only has a policy mode: `connect()` requires `enable_on_connect=True`
+and `gripper.enabled=True`, and starts both actuator loops. The gripper
+controller streams zero-displacement hold frames between commands, stops on
+stale feedback, a motor fault, or the configured temperature limit, and sends a
+zero-torque frame on shutdown.
+
+Do not mix millimetre and radian gripper columns. Datasets recorded before the
+radian rule stored millimetres under the same `gripper.pos` name; LeRobot checks
+names and shapes, not units.
+
+For the deployment CLI, checkpoint validation, and the action-delta gate, see
+the [policy deployment guide](https://github.com/nexform-tech/litearm-vla/blob/main/docs/policy-deployment.md)
+in `litearm-vla`.
+
 ## Requirements
 
 | Item | Requirement |
@@ -62,8 +95,10 @@ The LiteArm reports **absolute** joint positions from the arm controller, so
 | Python | 3.10+ |
 | LeRobot | `lerobot>=0.3.0,<0.5` |
 | Base SDK | `litearm-python>=2.1.0` (not on PyPI — install from its git repository) |
+| Gripper SDK | `litegrip-python` at the commit pinned in `pyproject.toml` |
 | Firmware | `Litearm1.5.0` or newer, with `CMD_JOINT_FOLLOW` (`0x08`) |
 | Hardware | The arm connected over USB CDC (`1d50:606f`) to this machine |
+| Combined adapter | One calibrated LiteGrip on SocketCAN and one RGB camera |
 
 > LeRobot is usually installed in its own conda/venv. Install this package into
 > **that same environment** so both `lerobot` and `litearm` are importable
@@ -304,9 +339,11 @@ first step. Each example's options are described in
 litearm-lerobot/
 ├── pyproject.toml             package metadata + pytest config
 ├── src/litearm_lerobot/
-│   ├── __init__.py            public API (LiteArmRobot, LiteArmRobotConfig, register)
+│   ├── __init__.py            public API (adapters, configs, controller, register)
 │   ├── config.py              LiteArmRobotConfig (LeRobot RobotConfig subclass)
 │   ├── robot.py               LiteArmRobot — the LeRobot Robot implementation
+│   ├── grip_camera_robot.py   LiteArmGripCameraRobot — arm + LiteGrip + camera
+│   ├── gripper.py             LiteGripController — the single LiteGrip owner
 │   ├── servo.py               ServoLoop (background thread), the single _send()
 │   ├── safety.py              soft-limit read + clamp + rate-limited reference
 │   └── utils.py               register() — LeRobot factory monkey-patch

@@ -1,13 +1,18 @@
 # litearm-lerobot
 
-`litearm-lerobot` 是 **LiteArm** 机械臂的 [LeRobot](https://github.com/huggingface/lerobot)
-`Robot` 适配器，供在机械臂上录制数据集或运行策略的工程师阅读。
+`litearm-lerobot` 为 **LiteArm** 单臂以及 **LiteArm + LiteGrip + 单相机** 提供
+[LeRobot](https://github.com/huggingface/lerobot) `Robot` 适配器，供录制数据集或
+运行策略的工程师阅读。
 
-通过 LeRobot 标准的 `Robot` 接口使用 LiteArm：读取观测、下发动作、录制
+通过 LeRobot 标准的 `Robot` 接口使用硬件：读取观测、下发动作、录制
 `LeRobotDataset` 回合用于策略训练——LeRobot 生态工具无需改动。
 
 ```text
 LeRobot Robot API ──→ LiteArmRobot ──→ litearm.Arm ──→ USB CDC ──→ STM32 ──→ motors
+                   └→ LiteArmGripCameraRobot
+                        ├→ litearm-python → USB CDC → seven joints
+                        ├→ LiteGripController → SocketCAN → LiteGrip
+                        └→ LeRobot camera API → one camera
 ```
 
 > 完整开发指南与 API 参考：[docs/DEVELOPER_GUIDE.zh-CN.md](docs/DEVELOPER_GUIDE.zh-CN.md)
@@ -18,6 +23,7 @@ LeRobot Robot API ──→ LiteArmRobot ──→ litearm.Arm ──→ USB CDC
 ## 目录
 
 - [概述与架构](#概述与架构)
+- [组合适配器](#组合适配器)
 - [环境要求](#环境要求)
 - [安装](#安装)
 - [快速开始](#快速开始)
@@ -52,6 +58,29 @@ LeRobot Robot API ──→ LiteArmRobot ──→ litearm.Arm ──→ USB CDC
 LiteArm 从机械臂控制器直接上报**绝对**关节位置，因此 `calibrate()` 是空操作，
 `is_calibrated` 恒为 `True`。
 
+## 组合适配器
+
+`LiteArmGripCameraRobot`（注册名 `litearm_grip_camera`）驱动一个 LiteArm、一个
+LiteGrip 和一个相机，暴露训练数据集使用的 8 维契约：
+
+| 关注点 | 实现 |
+|---|---|
+| 观测 | `joint1.pos ... joint7.pos`、`gripper.pos`、一路相机图像 |
+| 动作 | 同样七个关节加 `gripper.pos` |
+| 夹爪单位 | 标定后的开度角，弧度，闭合端为 0 |
+| 夹爪运动 | 不高于标定行程中点时 `grasp`，高于中点时 `open` |
+| 相机 | 恰好一个，使用配置的 feature 名 |
+
+这个适配器只有策略模式：`connect()` 要求 `enable_on_connect=True` 且
+`gripper.enabled=True`，并同时启动两个执行器的后台环。夹爪控制器在命令之间持续
+发送零位移保持帧，在反馈过期、电机故障或温度达到阈值时停止，退出时发送零力矩帧。
+
+不要把毫米与弧度的 `gripper.pos` 混用。在此单位规则之前录制的数据集在同一个
+feature 名下存的是毫米；LeRobot 只校验名称和形状，不校验单位。
+
+部署 CLI、检查点校验和动作跳变门禁见 `litearm-vla` 的
+[策略部署指南](https://github.com/nexform-tech/litearm-vla/blob/main/docs/policy-deployment.zh-CN.md)。
+
 ## 环境要求
 
 | 项目 | 要求 |
@@ -59,8 +88,10 @@ LiteArm 从机械臂控制器直接上报**绝对**关节位置，因此 `calibr
 | Python | 3.10+ |
 | LeRobot | `lerobot>=0.3.0,<0.5` |
 | 基础 SDK | `litearm-python>=2.1.0`（不在 PyPI 上——从它的 git 仓库安装） |
+| 夹爪 SDK | `litegrip-python`，提交号固定在 `pyproject.toml` |
 | 固件 | `Litearm1.5.0` 或更新，且带 `CMD_JOINT_FOLLOW`（`0x08`） |
 | 硬件 | 机械臂经 USB CDC（`1d50:606f`）连到本机 |
+| 组合适配器 | 一个已标定的 LiteGrip（SocketCAN）和一个 RGB 相机 |
 
 > LeRobot 通常装在自己的 conda/venv 环境里。请把本包装进**同一个环境**，让
 > `lerobot` 与 `litearm` 一起可导入（见[安装](#安装)）。
@@ -280,9 +311,11 @@ python examples/03_record_dataset.py \
 litearm-lerobot/
 ├── pyproject.toml             包元数据 + pytest 配置
 ├── src/litearm_lerobot/
-│   ├── __init__.py            公共 API（LiteArmRobot、LiteArmRobotConfig、register）
+│   ├── __init__.py            公共 API（适配器、配置、控制器、register）
 │   ├── config.py              LiteArmRobotConfig（LeRobot RobotConfig 子类）
 │   ├── robot.py               LiteArmRobot —— LeRobot Robot 的实现
+│   ├── grip_camera_robot.py   LiteArmGripCameraRobot —— 臂 + LiteGrip + 相机
+│   ├── gripper.py             LiteGripController —— LiteGrip 的唯一所有者
 │   ├── servo.py               ServoLoop（后台线程）与唯一的 _send()
 │   ├── safety.py              软限位读取 + 钳位 + 限速参考
 │   └── utils.py               register()——LeRobot 工厂 monkey-patch
