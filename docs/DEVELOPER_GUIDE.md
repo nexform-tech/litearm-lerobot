@@ -156,31 +156,18 @@ away. They are stated in full, with the reasons, in
 
 ## 4. Dataset recording
 
-`LeRobotDataset` requires **full feature specs** (not the shorthand returned by
-`robot.observation_features`):
+The repository does not ship a policy-training recorder yet. A recorder must
+obtain its requested action from a leader, teleoperator, planner, or policy,
+pass it through `send_action()`, and store the returned accepted action. It must
+store the follower's measured joint state separately as `observation.state`.
 
-```python
-features = {
-    "observation.state": {"dtype": "float32", "shape": (7,)},
-    "action":            {"dtype": "float32", "shape": (7,)},
-}
-```
+**Do not** derive `action` from `observation.state`. That creates an identity
+dataset with no demonstration signal.
 
-`LeRobotDataset.create(repo_id, fps, root, ...)` stores the dataset directly at
-`<root>` and **refuses to overwrite** an existing directory — pick a
-fresh `repo_id` or delete the directory to re-record. Every frame must contain a
-`"task"` key and numpy float32 arrays:
-
-```python
-dataset.add_frame({
-    "observation.state": np.asarray(obs["observation.state"], dtype=np.float32),
-    "action": np.asarray(action, dtype=np.float32),
-    "task": "push",
-})
-```
-
-The full loop is `create_episode_buffer()` → `add_frame(...)` × N →
-`save_episode()`. See [examples/03_record_dataset.py](../examples/03_record_dataset.py).
+[examples/03_record_dataset.py](../examples/03_record_dataset.py) is a
+state-replay diagnostic. It fails closed without explicit opt-in and never
+declares an `action` feature. Its output verifies the driver and dataset path;
+it is not policy-training evidence.
 
 ## 5. LeRobot CLI integration (optional)
 

@@ -39,16 +39,20 @@ small on first runs.
 > across its full range on the first step. Both example 02 and any policy
 > rollout should offset from the pose read at start-up.
 
-## 03 — Record a LeRobotDataset episode
+## 03 — Record a state-replay diagnostic
+
+This example has no independent action source and cannot produce policy-training
+data. It refuses to open the arm unless you explicitly opt into the diagnostic.
 
 ```bash
 python examples/03_record_dataset.py \
-  --repo-id litearm_demo --root data \
-  --episodes 1 --episode-length 50 --task push
+  --allow-state-replay-demo \
+  --repo-id litearm_state_replay_demo --root diagnostic_data \
+  --episodes 1 --episode-length 50 --task bench_check
 ```
 
-Moves the arm (zero-gravity, script, or teleop) while recording
-`observation.state` and `action` frames. The dataset lands at `data/litearm_demo/`,
-usable directly by LeRobot training scripts.
+The example sends each measured pose back as a hold target. It records
+`observation.state` and `diagnostic.state_replay_target`, but deliberately does
+not create an `action` feature. **Do not** use the output for policy training.
 
 Chinese version: [README.zh-CN.md](README.zh-CN.md)

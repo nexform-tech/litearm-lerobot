@@ -3,8 +3,8 @@
 `litearm-lerobot` 是 **LiteArm** 机械臂的 [LeRobot](https://github.com/huggingface/lerobot)
 `Robot` 适配器，供在机械臂上录制数据集或运行策略的工程师阅读。
 
-通过 LeRobot 标准的 `Robot` 接口使用 LiteArm：读取观测、下发动作、录制
-`LeRobotDataset` 回合用于策略训练——LeRobot 生态工具无需改动。
+通过 LeRobot 标准的 `Robot` 接口读取 LiteArm 观测并下发动作。训练数据采集必须
+另有独立动作源；本仓库的诊断录制脚本不提供动作源。
 
 ```text
 LeRobot Robot API ──→ LiteArmRobot ──→ litearm.Arm ──→ USB CDC ──→ STM32 ──→ motors
@@ -24,7 +24,7 @@ LeRobot Robot API ──→ LiteArmRobot ──→ litearm.Arm ──→ USB CDC
 - [配置](#配置)
 - [运动与安全](#运动与安全)
 - [观测 / 动作循环](#观测--动作循环)
-- [录制数据集](#录制数据集)
+- [数据集录制安全边界](#数据集录制安全边界)
 - [LeRobot CLI 集成](#lerobot-cli-集成)
 - [示例](#示例)
 - [常见问题排查](#常见问题排查)
@@ -178,48 +178,21 @@ while not done:
 
 正因为有这个环，LeRobot 策略循环才不会被卡住：没有任何一次调用会阻塞等运动完成。
 
-## 录制数据集
+## 数据集录制安全边界
 
-`LeRobotDataset` 要求**完整 feature 描述**（不是 `observation_features` 返回的简写）：
+本仓库当前不包含可用于策略训练的录制器。有效训练帧需要两个独立来源：
 
-```python
-from pathlib import Path
-import numpy as np
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from litearm_lerobot import LiteArmRobot, LiteArmRobotConfig
+- `observation.state` 是从机机械臂的实测状态。
+- `action` 是 `send_action()` 返回的已接受命令，其请求必须来自主臂、遥操作器、
+  规划器或策略。
 
-robot = LiteArmRobot(LiteArmRobotConfig())
-robot.connect()
+**不要**把 `observation.state` 复制到 `action`。那会生成恒等映射数据，使策略只学会
+保持当前位姿。
 
-features = {
-    "observation.state": {"dtype": "float32", "shape": (robot.config.num_joints,)},
-    "action": {"dtype": "float32", "shape": (robot.config.num_joints,)},
-}
-dataset = LeRobotDataset.create(
-    repo_id="litearm_demo", fps=30,
-    root=Path("data") / "litearm_demo",          # 该目录必须不存在
-    robot_type=robot.name, features=features, use_videos=False,
-)
-dataset.episode_buffer = dataset.create_episode_buffer()
-obs = robot.get_observation()
-dataset.add_frame({
-    "observation.state": np.asarray(obs["observation.state"], dtype=np.float32),
-    "action": np.asarray(obs["observation.state"], dtype=np.float32),
-    "task": "push",
-})
-dataset.save_episode()
-robot.disconnect()
-```
-
-要点：
-
-- `LeRobotDataset.create(...)` 会把数据集直接存在 `<root>`，且**拒绝覆盖**
-  已存在的目录——请换新的 `repo_id` 或删目录重录。
-- 每一帧必须含 `"task"` 键，且每个 feature 均为 numpy **float32** 数组。
-- 完整循环为 `create_episode_buffer()` → `add_frame(...)` × N →
-  `save_episode()`。
-
-现成的录制脚本见 [examples/03_record_dataset.py](examples/03_record_dataset.py)。
+[examples/03_record_dataset.py](examples/03_record_dataset.py) 仅用于验证驱动和数据路径。
+脚本默认拒绝运行，必须显式传入 `--allow-state-replay-demo`。即使显式确认，它也只把
+接受后的目标写入 `diagnostic.state_replay_target`，绝不写成 `action`，因此输出不能作为
+策略训练数据。
 
 ## LeRobot CLI 集成
 
@@ -241,7 +214,7 @@ register()            # 幂等；程序启动时调用一次
 |---|---|
 | [examples/01_read_observation.py](examples/01_read_observation.py) | 只读：连接并打印观测 |
 | [examples/02_send_action.py](examples/02_send_action.py) | 正弦轨迹运动（**会动**——请握好急停） |
-| [examples/03_record_dataset.py](examples/03_record_dataset.py) | 录制遥操作回合到 `LeRobotDataset` |
+| [examples/03_record_dataset.py](examples/03_record_dataset.py) | 显式确认后录制不可训练的状态回放诊断数据 |
 
 可运行命令（只有自动识别选错设备时才需要传 `--port`）：
 
@@ -249,7 +222,9 @@ register()            # 幂等；程序启动时调用一次
 python examples/01_read_observation.py --count 5
 python examples/02_send_action.py --duration 10 --amplitude 0.05
 python examples/03_record_dataset.py \
-  --repo-id litearm_demo --root data --episodes 1 --episode-length 50 --task push
+  --allow-state-replay-demo \
+  --repo-id litearm_state_replay_demo --root diagnostic_data \
+  --episodes 1 --episode-length 50 --task bench_check
 ```
 
 示例 02、03 会**驱动真实机械臂**。首次运行请把 `--amplitude` 调小、清空工作区，并把
@@ -272,7 +247,7 @@ python examples/03_record_dataset.py \
 | `ValueError: action dict must contain an 'action' key` | `send_action` 期望 `{"action": [..]}`。 |
 | `ValueError: 关节数不符：固件报 1，配置是 7` | 固件上报的关节数与 `num_joints` 不一致。1J 台架板报 `1`，7J 整臂报 `7`。 |
 | 连接时 `enable()` 失败 | 直连不可能是只读，因此这意味着机械臂没有应答。检查供电与 CDC 线缆。 |
-| `<root>` 数据集已存在 | `LeRobotDataset.create` 拒绝覆盖。换新的 `--repo-id` 或删除目录。 |
+| `<root>` 诊断数据集已存在 | `LeRobotDataset.create` 拒绝覆盖。请换新的 `--repo-id`；本流程不应删除已有录制。 |
 
 ## 包结构
 

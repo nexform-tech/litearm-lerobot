@@ -34,15 +34,20 @@ python examples/02_send_action.py \
 > **不要**把绝对关节角当成轨迹传进去 —— 那会在第一步就把机械臂甩过整个行程。
 > 示例 02 与任何策略回放都应从**启动时读到的位姿**偏移。
 
-## 03 —— 录制 LeRobotDataset 回合
+## 03 —— 录制状态回放诊断数据
+
+该示例没有独立动作源，不能生成策略训练数据。除非显式确认诊断用途，否则脚本不会
+打开机械臂。
 
 ```bash
 python examples/03_record_dataset.py \
-  --repo-id litearm_demo --root data \
-  --episodes 1 --episode-length 50 --task push
+  --allow-state-replay-demo \
+  --repo-id litearm_state_replay_demo --root diagnostic_data \
+  --episodes 1 --episode-length 50 --task bench_check
 ```
 
-在移动机械臂（零重力、脚本或遥操作）的同时录制 `observation.state` 与
-`action` 帧。数据集产出在 `data/litearm_demo/`，可直接供 LeRobot 训练脚本使用。
+该示例把每个实测位姿作为保持目标发回，只记录 `observation.state` 和
+`diagnostic.state_replay_target`，并刻意不创建 `action` feature。**不要**把输出用于
+策略训练。
 
 English: [README.md](README.md)
