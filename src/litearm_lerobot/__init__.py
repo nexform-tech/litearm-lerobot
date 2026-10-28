@@ -1,8 +1,14 @@
-"""litearm-lerobot: LeRobot driver for the LiteArm robotic arm.
+"""litearm-lerobot: LeRobot drivers for LiteArm and LiteArm + LiteGrip + camera.
 
 Wraps **litearm-python**'s direct USB CDC client behind the LeRobot ``Robot``
 interface, so the arm can be driven with LeRobot-style observation/action
 loops, recording and teleoperation. There is no litearm-server in this path.
+
+``LiteArmRobot`` exposes the seven joint positions as one vector.
+``LiteArmGripCameraRobot`` adds a calibrated LiteGrip opening (radians) and one
+camera, using the eight-dimensional contract that the training datasets store.
+The ``litearm_lerobot.gripper`` controller is the single owner of the LiteGrip
+CAN session for both recording and policy adapters.
 
 Usage::
 
@@ -28,11 +34,35 @@ have, use the git commit.
 """
 
 from .config import LiteArmRobotConfig
+from .grip_camera_robot import (
+    ACTION_NAMES,
+    GRIPPER_ACTION_NAME,
+    JOINT_ACTION_NAMES,
+    LiteArmGripCameraRobot,
+    LiteArmGripCameraRobotConfig,
+)
+from .gripper import (
+    GRIPPER_FEATURE,
+    GripperError,
+    GripperSample,
+    LiteGripController,
+    LiteGripOptions,
+)
 from .robot import LiteArmRobot
 from .utils import register
 
 __all__ = [
+    "ACTION_NAMES",
+    "GRIPPER_ACTION_NAME",
+    "GRIPPER_FEATURE",
+    "GripperError",
+    "GripperSample",
+    "JOINT_ACTION_NAMES",
+    "LiteArmGripCameraRobot",
+    "LiteArmGripCameraRobotConfig",
     "LiteArmRobot",
     "LiteArmRobotConfig",
+    "LiteGripController",
+    "LiteGripOptions",
     "register",
 ]

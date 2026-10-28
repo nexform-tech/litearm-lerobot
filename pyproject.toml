@@ -13,7 +13,7 @@ name = "litearm-lerobot"
 # the source-only shape), so the local label is inert. Same fix as
 # litearm-studio/daemon, which is in the identical situation.
 version = "0.0.0+semantic-release"
-description = "LeRobot driver for the LiteArm robotic arm (wraps litearm-python)"
+description = "LeRobot drivers for LiteArm and LiteArm with LiteGrip and one camera"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "LicenseRef-Proprietary"
@@ -22,6 +22,9 @@ authors = [{ name = "luochun" }]
 keywords = ["robotics", "robot-arm", "litearm", "lerobot"]
 dependencies = [
     "litearm-python>=2.1.0",
+    # The gripper SDK is not on PyPI; pin the upstream commit so an install
+    # reproduces the API this adapter uses (fresh/data_age_s status fields).
+    "litegrip @ git+https://github.com/nexform-tech/litegrip-python.git@0d46d6d8c598c0caa1ca863748dffb0328d5b80e",
     "lerobot>=0.3.0,<0.5",
 ]
 

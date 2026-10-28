@@ -3,12 +3,13 @@ from __future__ import annotations
 
 
 def register() -> None:
-    """Register ``litearm`` with LeRobot's robot factory.
+    """Register both adapters with LeRobot's robot factory.
 
     LeRobot builds robots through ``lerobot.robots.utils.make_robot_from_config``,
-    an internal if/elif chain that has no branch for our driver. Calling
-    ``register()`` patches that function so a config whose ``type == "litearm"``
-    resolves to :class:`litearm_lerobot.LiteArmRobot`.
+    an internal if/elif chain that has no branch for our drivers. Calling
+    ``register()`` patches that function so ``litearm`` resolves to
+    :class:`litearm_lerobot.LiteArmRobot` and ``litearm_grip_camera`` resolves
+    to :class:`litearm_lerobot.LiteArmGripCameraRobot`.
 
     This enables the standard LeRobot CLI against a LiteArm, e.g.::
 
@@ -19,6 +20,7 @@ def register() -> None:
     Idempotent: repeated calls are safe.
     """
     from .config import LiteArmRobotConfig  # noqa: F401  (registers the draccus choice)
+    from .grip_camera_robot import LiteArmGripCameraRobotConfig  # noqa: F401
 
     import lerobot.robots.utils as robot_utils
 
@@ -31,7 +33,12 @@ def register() -> None:
             from .robot import LiteArmRobot
 
             return LiteArmRobot(config)
+        if getattr(config, "type", None) == "litearm_grip_camera":
+            from .grip_camera_robot import LiteArmGripCameraRobot
+
+            return LiteArmGripCameraRobot(config)
         return original(config)
 
     patched._litearm_registered = True  # type: ignore[attr-defined]
+    patched._litearm_grip_camera_registered = True  # type: ignore[attr-defined]
     robot_utils.make_robot_from_config = patched
